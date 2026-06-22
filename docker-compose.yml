@@ -1,0 +1,15 @@
+
+services:
+  app:
+    build: .
+    container_name: gaupo_ai
+    ports:
+      - "8085:8085"
+    env_file:
+      - .env
+    restart: unless-stopped
+    
+
+volumes:
+  postgres_data:
+  pgvector_data:

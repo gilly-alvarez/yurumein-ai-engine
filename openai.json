@@ -1,0 +1,866 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Yurumein Al",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/translater": {
+      "post": {
+        "tags": [
+          "Translation"
+        ],
+        "summary": "Translte Text",
+        "operationId": "translte_text_translater_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Translater_text_Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Translater_text_Response"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/learning_hub": {
+      "post": {
+        "tags": [
+          "learning hub"
+        ],
+        "summary": "Learning Hub",
+        "operationId": "learning_hub_learning_hub_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Learning_hub_Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningHub_Response"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chatstrem": {
+      "post": {
+        "tags": [
+          "chatbot"
+        ],
+        "summary": "Chat Stream",
+        "description": "FIXED: Stream chat responses in real-time",
+        "operationId": "chat_stream_chatstrem_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_chat_stream_chatstrem_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "tags": [
+          "chatbot"
+        ],
+        "summary": "Chat Simple",
+        "description": "SAFE: Non-streaming chat endpoint with optional file upload",
+        "operationId": "chat_simple_chat_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_chat_simple_chat_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatbotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{user_id}": {
+      "get": {
+        "tags": [
+          "chatbot"
+        ],
+        "summary": "Get User Sessions",
+        "description": "Get all chat sessions for a user",
+        "operationId": "get_user_sessions_sessions__user_id__get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChatSessionResponse"
+                  },
+                  "title": "Response Get User Sessions Sessions  User Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session/{session_id}/history": {
+      "get": {
+        "tags": [
+          "chatbot"
+        ],
+        "summary": "Get Session History",
+        "description": "Get full chat history for a session",
+        "operationId": "get_session_history_session__session_id__history_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session/{session_id}": {
+      "delete": {
+        "tags": [
+          "chatbot"
+        ],
+        "summary": "Delete Session",
+        "description": "Delete a chat session",
+        "operationId": "delete_session_session__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/upload_docs": {
+      "post": {
+        "tags": [
+          "chatbot"
+        ],
+        "summary": "Upload Docs Rag",
+        "description": "FIXED: Upload and process documents for RAG",
+        "operationId": "upload_docs_RAG_upload_docs_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_docs_RAG_upload_docs_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Health Check",
+        "description": "Health check endpoint for Docker/monitoring",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Root",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_chat_simple_chat_post": {
+        "properties": {
+          "user_prompt": {
+            "type": "string",
+            "title": "User Prompt"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "upload_file": {
+            "type": "string",
+            "format": "binary",
+            "title": "Upload File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_prompt",
+          "user_id"
+        ],
+        "title": "Body_chat_simple_chat_post"
+      },
+      "Body_chat_stream_chatstrem_post": {
+        "properties": {
+          "user_prompt": {
+            "type": "string",
+            "title": "User Prompt"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "upload_file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_prompt",
+          "user_id"
+        ],
+        "title": "Body_chat_stream_chatstrem_post"
+      },
+      "Body_upload_docs_RAG_upload_docs_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_docs_RAG_upload_docs_post"
+      },
+      "ChatHistoryResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Messages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "messages"
+        ],
+        "title": "ChatHistoryResponse"
+      },
+      "ChatSessionResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "title",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChatSessionResponse"
+      },
+      "ChatbotResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "response": {
+            "type": "string",
+            "title": "Response"
+          },
+          "file_status": {
+            "type": "string",
+            "title": "File Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "response",
+          "file_status"
+        ],
+        "title": "ChatbotResponse"
+      },
+      "FocusWord": {
+        "properties": {
+          "Question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "word_phrase": {
+            "type": "string",
+            "title": "Word Phrase"
+          },
+          "option": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Option"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "Question",
+          "word_phrase",
+          "option",
+          "answer"
+        ],
+        "title": "FocusWord"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LearningHub_Response": {
+        "properties": {
+          "lesson_unit": {
+            "$ref": "#/components/schemas/LessonUnit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lesson_unit"
+        ],
+        "title": "LearningHub_Response"
+      },
+      "Learning_hub_Request": {
+        "properties": {
+          "user_prompt": {
+            "type": "string",
+            "title": "User Prompt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_prompt"
+        ],
+        "title": "Learning_hub_Request"
+      },
+      "LessonUnit": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "vocabulary_section": {
+            "$ref": "#/components/schemas/VocabularySection"
+          },
+          "pronunciation_section": {
+            "$ref": "#/components/schemas/PronunciationSection"
+          },
+          "quiz": {
+            "$ref": "#/components/schemas/Quiz"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "vocabulary_section",
+          "pronunciation_section",
+          "quiz"
+        ],
+        "title": "LessonUnit"
+      },
+      "PronunciationSection": {
+        "properties": {
+          "focus_words": {
+            "items": {
+              "$ref": "#/components/schemas/FocusWord"
+            },
+            "type": "array",
+            "title": "Focus Words"
+          }
+        },
+        "type": "object",
+        "required": [
+          "focus_words"
+        ],
+        "title": "PronunciationSection"
+      },
+      "Quiz": {
+        "properties": {
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/QuizQuestion"
+            },
+            "type": "array",
+            "title": "Questions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "questions"
+        ],
+        "title": "Quiz"
+      },
+      "QuizQuestion": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "question_text": {
+            "type": "string",
+            "title": "Question Text"
+          },
+          "options": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Options"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "question_text",
+          "options",
+          "answer"
+        ],
+        "title": "QuizQuestion"
+      },
+      "Translater_text_Request": {
+        "properties": {
+          "base_language": {
+            "type": "string",
+            "title": "Base Language"
+          },
+          "target_language": {
+            "type": "string",
+            "title": "Target Language"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_language",
+          "target_language",
+          "text"
+        ],
+        "title": "Translater_text_Request"
+      },
+      "Translater_text_Response": {
+        "properties": {
+          "base_language": {
+            "type": "string",
+            "title": "Base Language"
+          },
+          "target_language": {
+            "type": "string",
+            "title": "Target Language"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "translation": {
+            "type": "string",
+            "title": "Translation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_language",
+          "target_language",
+          "text",
+          "translation"
+        ],
+        "title": "Translater_text_Response"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VocabularyItem": {
+        "properties": {
+          "word_phrase": {
+            "type": "string",
+            "title": "Word Phrase",
+            "description": "The word or phrase in the target language (e.g., Garifuna)."
+          },
+          "translation": {
+            "type": "string",
+            "title": "Translation",
+            "description": "The translation in English or base language."
+          }
+        },
+        "type": "object",
+        "required": [
+          "word_phrase",
+          "translation"
+        ],
+        "title": "VocabularyItem"
+      },
+      "VocabularySection": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VocabularyItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "VocabularySection"
+      }
+    }
+  }
+}
