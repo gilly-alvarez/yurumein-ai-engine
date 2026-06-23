@@ -10,7 +10,7 @@ from app.services.utils.RAG_pipeline.DB.session_manager import SessionManager
 
 store = VectorStoreManager()
 DBManager = SessionManager()
-app = FastAPI(title="Yurumein Al",version="0.1.0")
+app = FastAPI(title="Yurumein AI",version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,7 +28,7 @@ app.include_router(chatbot_router ,tags=['chatbot'])
 @app.get("/",tags = ["health"])
 async def root():
     return """
-"message": "Welcome to the gaupo AI!",
+"message": "Welcome to the Yurumein AI!",
         "status": "healthy",
         "version": "1.0.0"
 """
@@ -38,7 +38,7 @@ async def health_check():
     """Health check endpoint for Docker/monitoring"""
     return {
         "status": "healthy",
-        "service": "Study Buddy AI"
+        "service": "Yurumein AI"
     }
 
 @app.on_event("startup")
