@@ -41,7 +41,7 @@ Generate a complete, structured JSON lesson for language learning that:
 ---
 ###  Output Format
 Strictly return output matching this Pydantic model schema:
-{{schema_instructions}}
+{schema_instructions}
 
 ###  Content Rules
 1. **Language:** All lesson text and vocabulary must be written primarily in *Garifuna*, with translations in English (or learner's base language). 
