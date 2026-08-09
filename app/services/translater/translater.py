@@ -7,30 +7,43 @@ from openai import OpenAI
 from .translater_schema import llm_response
 from app.core.config import settings
 from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import VectorStoreManager
+from app.services.lexicon.lexicon import YurumeinLexicon
 
 if not os.environ.get("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+
+# Returned when the curated vector store has no grounded context for the
+# requested term or phrase. The LLM is never called in this path.
+_DECLINE_RESPONSE = (
+    "This word or phrase is not currently available in the Yurumein AI "
+    "verified Garífuna database. Please try another word or phrase, or "
+    "consult a Garífuna language expert."
+)
 
 
 class Translater:
     def __init__(self):
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self.vector_store = VectorStoreManager()
+        # NOTE: Lexicon entries represent the Enríquez documented source dataset.
+        # Row-level independent verification is not yet in the schema and will
+        # be addressed in a later controlled schema migration.
+        self.lexicon = YurumeinLexicon()
 
     def _retrieve_context(self, text: str) -> str:
+        """Keyword retrieval from the curated vector store. Returns empty string on miss or error."""
         try:
-            docs = self.vector_store.similarity_search(query=text, k=5)
-            chunks = [doc.page_content for doc in docs if doc.page_content.strip()]
+            docs = self.vector_store.keyword_search(query=text, k=5)
+            chunks = [d["document"] for d in docs if (d.get("document") or "").strip()]
             return "\n---\n".join(chunks)
         except Exception:
             return ""
 
     def get_system_prompt(self, context: str) -> str:
-        context_section = context if context else "No verified context found."
         return f"""You are **Yurumein AI**, a Garífuna language translator.
 
 === VERIFIED GARÍFUNA DICTIONARY CONTEXT ===
-{context_section}
+{context}
 ============================================
 
 ### Translation Rules
@@ -39,10 +52,6 @@ class Translater:
 3. Do not guess, invent, or approximate Garífuna vocabulary or grammar. Garífuna is a living endangered language; inaccuracy causes cultural harm.
 4. Maintain cultural fidelity and preserve traditional Garífuna forms.
 5. Auto-detect input language when unspecified.
-
-### When to decline
-If the verified context above is missing, empty, or does not contain a clear basis for the requested translation, return this exact JSON and nothing else:
-{{"translation": "This word or phrase is not currently available in the Yurumein AI verified Garífuna database. Please try another word or phrase, or consult a Garífuna language expert."}}
 
 ### Output format (strict JSON only)
 {{"translation": "str"}}
@@ -59,16 +68,30 @@ Provide only the translated output in {target_language}."""
 
     def get_response(self, translation_info: Dict):
         try:
-            context = self._retrieve_context(translation_info["text"])
+            text = translation_info["text"]
+            base_language = translation_info["base_language"]
+            target_language = translation_info["target_language"]
+
+            # Lexicon-first exact lookup for Garífuna targets.
+            # Authoritative relative to the imported source dataset; independent
+            # verification governance is deferred to a later schema migration.
+            if target_language.lower() == "garifuna":
+                r = self.lexicon.lookup(text, base_language)
+                if r:
+                    return llm_response(translation=r[0]["garifuna"])
+
+            # Keyword retrieval from the curated vector store.
+            context = self._retrieve_context(text)
+
+            # Decline without LLM inference when no grounded context exists.
+            if not context:
+                return llm_response(translation=_DECLINE_RESPONSE)
+
             messages = [
                 {"role": "system", "content": self.get_system_prompt(context)},
                 {
                     "role": "user",
-                    "content": self.get_user_prompt(
-                        translation_info["base_language"],
-                        translation_info["target_language"],
-                        translation_info["text"],
-                    ),
+                    "content": self.get_user_prompt(base_language, target_language, text),
                 },
             ]
 
