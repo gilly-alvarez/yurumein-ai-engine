@@ -11,6 +11,8 @@ from ..DB.session_manager import SessionManager
 from ..prompt.prompt import system_prompt, user_prompt
 from ..vectore_db.pgvector_db import VectorStoreManager
 from .state import ChatState
+from app.services.chatbot.lexical_parser import parse_lexical_request
+from app.services.lexicon.lexicon import YurumeinLexicon
 
 
 class Nodes:
@@ -147,6 +149,20 @@ class Nodes:
             )
         return "\n\n".join(parts)
 
+    def _build_lexicon_context(self, term: str, language: str, rows: list[dict]) -> str:
+        forms = list(dict.fromkeys(r["garifuna"] for r in rows if r.get("garifuna")))
+        if not forms:
+            return ""
+        forms_text = "\n".join(f"- {f}" for f in forms)
+        return (
+            "<LEXICON_CONTEXT>\n"
+            f"Source: yurumein_lexicon\n"
+            f"Query term: {term}\n"
+            f"Source language: {language.capitalize()}\n"
+            f"Documented Garífuna forms:\n{forms_text}\n"
+            "</LEXICON_CONTEXT>"
+        )
+
     def _vector_retrieve(self, query: str, top_k: int = 5) -> list[dict]:
         docs = self.vector_store.similarity_search(query=query, k=top_k)
         results = []
@@ -203,7 +219,7 @@ class Nodes:
             return {"context": f"Error processing file: {str(e)}"}
 
     async def global_retrieval_process(self, state: ChatState) -> dict:
-        """Retrieve with vector search for normal chat requests."""
+        """Retrieve context: lexicon-first for translation queries, RAG otherwise."""
         try:
             messages = state.get("messages", [])
             user_query = state.get("user_query", "")
@@ -211,6 +227,16 @@ class Nodes:
             query = self._get_retrieval_query(messages, user_query)
             if not query:
                 return {"context": "No query provided"}
+
+            parse_result = parse_lexical_request(query)
+            if parse_result.matched:
+                rows = YurumeinLexicon().lookup(parse_result.term, parse_result.language)
+                if rows:
+                    lexicon_context = self._build_lexicon_context(
+                        parse_result.term, parse_result.language, rows
+                    )
+                    if lexicon_context:
+                        return {"context": lexicon_context}
 
             retrieved_docs = self._vector_retrieve(query=query, top_k=5)
             if not retrieved_docs:
