@@ -40,6 +40,21 @@ _PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "how_do_you_say",
     ),
     (
+        # Shortened form: "How do you say father" / "How do you say father?" / "How do you say father??".
+        # Placed after how_do_you_say so the explicit "in garifuna" form takes precedence.
+        # The negative lookahead (?!\s+in\s+\w) stops the term capture before any
+        # "in [explicit-language]" phrase, so "How do you say father in Spanish?"
+        # falls through as NO_MATCH (pattern 1 also misses — correct, it is not a
+        # Garífuna request). Terminal punctuation is consumed by the greedy group;
+        # _clean_term strips it from the captured string.
+        re.compile(
+            r'how\s+do\s+you\s+say\s+((?:(?!\s+in\s+\w).)+)\s*$',
+            re.IGNORECASE,
+        ),
+        "english",
+        "how_do_you_say_short",
+    ),
+    (
         re.compile(
             r'translate\s+(.+?)\s+to\s+gar[ií]funa\b',
             re.IGNORECASE,
@@ -95,7 +110,7 @@ def parse_lexical_request(text: str) -> ParseResult:
     Parse a natural-language lexical lookup request.
 
     Returns a ParseResult with matched=True only when the input matches one
-    of the six supported patterns and the extracted term is non-empty.
+    of the seven supported patterns and the extracted term is non-empty.
     No DB access, no LLM, fully deterministic.
     """
     if not text or not text.strip():

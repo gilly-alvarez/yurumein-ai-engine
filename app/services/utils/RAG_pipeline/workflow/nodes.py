@@ -1,6 +1,7 @@
 import os
 import re
 import tempfile
+import yaml
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -13,6 +14,49 @@ from ..vectore_db.pgvector_db import VectorStoreManager
 from .state import ChatState
 from app.services.chatbot.lexical_parser import parse_lexical_request
 from app.services.lexicon.lexicon import YurumeinLexicon
+
+# ---------------------------------------------------------------------------
+# Source Registry — loaded once at module import.
+# Keyed by filename (matches metadata["filename"] stored in PGVector chunks).
+# Returns {} on any failure so retrieval continues without registry info.
+# ---------------------------------------------------------------------------
+_REGISTRY_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "registry", "source_registry.yaml"
+)
+
+
+def _load_source_registry() -> dict:
+    try:
+        with open(_REGISTRY_PATH, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        registry = {s["filename"]: s for s in data.get("sources", [])}
+        print(f"[source_registry] Loaded {len(registry)} entries.")
+        return registry
+    except Exception as exc:
+        print(f"[source_registry] Failed to load ({exc}). Retrieval continues without registry.")
+        return {}
+
+
+_SOURCE_REGISTRY: dict = _load_source_registry()
+
+
+def _registry_header(filename: str) -> str:
+    """Return a compact authority annotation from the registry for a given filename."""
+    reg = _SOURCE_REGISTRY.get(filename)
+    if not reg:
+        return f"Tier: ? | Canonical: (unregistered)"
+    canonical = reg.get("canonical_title") or filename
+    tier = reg.get("overall_tier", "?")
+    verification = reg.get("verification_status", "")
+    domain_authority = reg.get("domain_authority") or {}
+    non_na_domains = {
+        k: v for k, v in domain_authority.items()
+        if v and str(v).upper() not in ("N/A", "NONE", "")
+    }
+    domain_str = (" | Domain: " + " ".join(f"{k}:{v}" for k, v in non_na_domains.items())
+                  if non_na_domains else "")
+    verification_str = f" | Verification: {verification}" if verification else ""
+    return f"Tier: {tier}{verification_str} | Canonical: {canonical}{domain_str}"
 
 
 class Nodes:
@@ -139,12 +183,15 @@ class Nodes:
         parts = []
         for index, doc in enumerate(docs, start=1):
             metadata = doc.get("metadata") or {}
-            source = metadata.get("filename") or metadata.get("source") or "unknown"
+            filename = metadata.get("filename") or metadata.get("source") or "unknown"
             page_number = metadata.get("page_number", metadata.get("page"))
             page_label = f" | Page: {page_number}" if page_number is not None else ""
             retrieval_source = doc.get("retrieval_source", "vector")
+            authority = _registry_header(filename)
             parts.append(
-                f"[Source: {source}{page_label} | Rank: {index} | Retrieval: {retrieval_source}]\n"
+                f"[Doc {index} | File: {filename}{page_label}"
+                f" | {authority}"
+                f" | Retrieval: {retrieval_source} | Rank: {index}]\n"
                 f"{doc.get('page_content', '')}"
             )
         return "\n\n".join(parts)
@@ -219,7 +266,15 @@ class Nodes:
             return {"context": f"Error processing file: {str(e)}"}
 
     async def global_retrieval_process(self, state: ChatState) -> dict:
-        """Retrieve context: lexicon-first for translation queries, RAG otherwise."""
+        """Retrieve context: lexicon-first for translation queries, RAG otherwise.
+
+        Lexical-hit path: structured lexicon entry found → deterministic lexicon answer.
+        Lexical-miss path (RP10): term recognised but not in lexicon → hybrid retrieval
+          using the extracted term as the query signal (not the full conversational
+          sentence). Context is prefixed with <LEXICON_MISS> so generation can
+          distinguish "not in lexicon" from "term does not exist in Garífuna."
+        Generic RAG path: non-lexical query → vector retrieval.
+        """
         try:
             messages = state.get("messages", [])
             user_query = state.get("user_query", "")
@@ -232,11 +287,48 @@ class Nodes:
             if parse_result.matched:
                 rows = YurumeinLexicon().lookup(parse_result.term, parse_result.language)
                 if rows:
+                    # Lexical HIT — deterministic structured-lexicon answer.
                     lexicon_context = self._build_lexicon_context(
                         parse_result.term, parse_result.language, rows
                     )
                     if lexicon_context:
                         return {"context": lexicon_context}
+                else:
+                    # Lexical MISS (RP10): structured lexicon has no entry for this term.
+                    # Use the extracted term alone as the retrieval signal — not the full
+                    # conversational query and not "term garifuna".
+                    # Rationale: "garifuna" is near-omnipresent in this corpus, so appending
+                    # it boosts overview/history documents (which say "garifuna" hundreds of
+                    # times) over vocabulary documents (which do not). The term alone produces
+                    # a semantically targeted embedding that correctly surfaces vocabulary
+                    # content in LIBRO SERIE I and DICCIONARIO chunks.
+                    rag_query = parse_result.term
+                    print(
+                        f"[lexical_miss] term={parse_result.term!r} language={parse_result.language!r} "
+                        f"rag_query={rag_query!r}"
+                    )
+                    retrieved_docs = self._hybrid_retrieve(query=rag_query, top_k=5)
+                    miss_preamble = (
+                        "<LEXICON_MISS>\n"
+                        f"The Yurumein structured lexicon contains no entry for "
+                        f"'{parse_result.term}' ({parse_result.language}). "
+                        "Absence from the structured lexicon does NOT mean the term "
+                        "has no Garífuna equivalent. "
+                        "The following documentary evidence from approved language "
+                        "sources was retrieved as secondary evidence.\n"
+                        "</LEXICON_MISS>\n\n"
+                    )
+                    if retrieved_docs:
+                        return {
+                            "context": miss_preamble + self._build_context(retrieved_docs),
+                            "retrieved_docs": retrieved_docs,
+                        }
+                    return {
+                        "context": (
+                            miss_preamble
+                            + "No documentary evidence found in available sources."
+                        ),
+                    }
 
             retrieved_docs = self._vector_retrieve(query=query, top_k=5)
             if not retrieved_docs:

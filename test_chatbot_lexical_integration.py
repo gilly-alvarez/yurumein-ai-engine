@@ -160,16 +160,29 @@ class TestChatbotLexicalIntegration:
         assert "arbol" not in ctx.split("árbol")[0]  # "árbol" not silently replaced
         assert "Nuiñu" in ctx
 
-    # 5. Parser match + zero lexicon rows → falls through to existing RAG
-    def test_parser_match_zero_rows_falls_through_to_rag(self):
+    # 5. Parser match + zero lexicon rows → RP10 hybrid retrieval (not _vector_retrieve)
+    def test_parser_match_zero_rows_triggers_hybrid_retrieval(self):
+        # RP10: lexical MISS must call _hybrid_retrieve with the extracted term,
+        # not the full conversational sentence. _vector_retrieve is the generic
+        # RAG path and must NOT be called for a lexical miss.
         with patch(_PATCH) as MockLexicon, \
-             patch.object(self.nodes, "_vector_retrieve", return_value=_RAG_DOCS) as mock_retrieve:
+             patch.object(self.nodes, "_hybrid_retrieve", return_value=_RAG_DOCS) as mock_hybrid, \
+             patch.object(self.nodes, "_vector_retrieve") as mock_vector:
             MockLexicon.return_value.lookup.return_value = []
             result = _run(self.nodes.global_retrieval_process(
                 _make_state("How do you say xenolith in Garífuna?")
             ))
 
-        mock_retrieve.assert_called_once()
+        mock_hybrid.assert_called_once()
+        mock_vector.assert_not_called()
+        query_used = mock_hybrid.call_args.kwargs["query"]
+        assert "xenolith" in query_used
+        # RP10: retrieval query is the extracted term alone — not the full
+        # conversational sentence and not "term garifuna". Adding "garifuna"
+        # boosts overview/history documents over vocabulary documents.
+        assert "How do you say" not in query_used
+        assert query_used.strip() == "xenolith"
+        assert "<LEXICON_MISS>" in result["context"]
         assert "<LEXICON_CONTEXT>" not in result["context"]
 
     # 6. Unrelated cultural question → lexicon never instantiated, RAG path used
@@ -280,3 +293,138 @@ class TestNormalizationContract:
     def test_internal_whitespace_collapsed(self):
         assert normalize_term("wedding  ring") == "wedding ring"
         assert normalize_term("  buenos  días  ") == "buenos dias"
+
+
+# ---------------------------------------------------------------------------
+# RP10 fallback retrieval-query construction (Phase 4)
+# ---------------------------------------------------------------------------
+
+class TestRP10LexicalMissFallback:
+    """
+    Verifies RP10: on a lexical MISS the retrieval query is built from the
+    extracted term, not from the full conversational sentence.
+
+    Tests A–D exercise English MISS variants.
+    Test E–F verify generic RAG queries remain completely untouched.
+    Test G verifies the Spanish MISS path constructs a language-appropriate query.
+    """
+
+    def setup_method(self):
+        self.nodes = Nodes()
+
+    # A. Lexicon HIT — deterministic result, secondary RAG must not be called
+    def test_A_lexicon_hit_uses_deterministic_result_only(self):
+        rows = [_make_row("Adurugutu", english="abandoned")]
+
+        with patch(_PATCH) as MockLexicon, \
+             patch.object(self.nodes, "_hybrid_retrieve") as mock_hybrid, \
+             patch.object(self.nodes, "_vector_retrieve") as mock_vector:
+            MockLexicon.return_value.lookup.return_value = rows
+            result = _run(self.nodes.global_retrieval_process(
+                _make_state("What is the garifuna word for abandoned?")
+            ))
+
+        ctx = result["context"]
+        assert "<LEXICON_CONTEXT>" in ctx
+        assert "abandoned" in ctx
+        assert "Adurugutu" in ctx
+        mock_hybrid.assert_not_called()
+        mock_vector.assert_not_called()
+
+    # B. Lexicon MISS, long form — fallback uses extracted term, not full sentence
+    def test_B_lexical_miss_father_long_form_builds_term_query(self):
+        with patch(_PATCH) as MockLexicon, \
+             patch.object(self.nodes, "_hybrid_retrieve", return_value=_RAG_DOCS) as mock_hybrid:
+            MockLexicon.return_value.lookup.return_value = []
+            result = _run(self.nodes.global_retrieval_process(
+                _make_state("How do you say father in garifuna?")
+            ))
+
+        mock_hybrid.assert_called_once()
+        query_used = mock_hybrid.call_args.kwargs["query"]
+        # RP10: query is the extracted term alone — not "father garifuna".
+        # "garifuna" as a keyword floods the corpus (present in every document
+        # title/context) and boosts overview/history chunks over vocabulary chunks.
+        assert query_used.strip() == "father"
+        assert "How do you say" not in query_used
+        assert "<LEXICON_MISS>" in result["context"]
+        assert "<LEXICON_CONTEXT>" not in result["context"]
+
+    # C. Lexicon MISS, short form — same RP10 behavior
+    def test_C_lexical_miss_father_short_form_same_behavior(self):
+        with patch(_PATCH) as MockLexicon, \
+             patch.object(self.nodes, "_hybrid_retrieve", return_value=_RAG_DOCS) as mock_hybrid:
+            MockLexicon.return_value.lookup.return_value = []
+            result = _run(self.nodes.global_retrieval_process(
+                _make_state("How do you say father?")
+            ))
+
+        mock_hybrid.assert_called_once()
+        query_used = mock_hybrid.call_args.kwargs["query"]
+        assert query_used.strip() == "father"
+        assert "How do you say" not in query_used
+        assert "<LEXICON_MISS>" in result["context"]
+
+    # D. Lexicon MISS, repeated punctuation — same RP10 behavior
+    def test_D_lexical_miss_father_repeated_punctuation_same_behavior(self):
+        with patch(_PATCH) as MockLexicon, \
+             patch.object(self.nodes, "_hybrid_retrieve", return_value=_RAG_DOCS) as mock_hybrid:
+            MockLexicon.return_value.lookup.return_value = []
+            result = _run(self.nodes.global_retrieval_process(
+                _make_state("How do you say father??")
+            ))
+
+        mock_hybrid.assert_called_once()
+        query_used = mock_hybrid.call_args.kwargs["query"]
+        assert query_used.strip() == "father"
+        assert "<LEXICON_MISS>" in result["context"]
+
+    # E. Cultural query — generic _vector_retrieve path, not _hybrid_retrieve
+    def test_E_cultural_query_uses_vector_retrieve_not_hybrid(self):
+        with patch(_PATCH) as MockLexicon, \
+             patch.object(self.nodes, "_hybrid_retrieve") as mock_hybrid, \
+             patch.object(self.nodes, "_vector_retrieve", return_value=_RAG_DOCS) as mock_vector:
+            result = _run(self.nodes.global_retrieval_process(
+                _make_state("What is the Dügü?")
+            ))
+
+        MockLexicon.assert_not_called()
+        mock_hybrid.assert_not_called()
+        mock_vector.assert_called_once()
+        assert "<LEXICON_MISS>" not in result["context"]
+        assert "<LEXICON_CONTEXT>" not in result["context"]
+
+    # F. Historical query — same generic path
+    def test_F_historical_query_uses_vector_retrieve_not_hybrid(self):
+        with patch(_PATCH) as MockLexicon, \
+             patch.object(self.nodes, "_hybrid_retrieve") as mock_hybrid, \
+             patch.object(self.nodes, "_vector_retrieve", return_value=_RAG_DOCS) as mock_vector:
+            result = _run(self.nodes.global_retrieval_process(
+                _make_state("What are the origins of the Garífuna people?")
+            ))
+
+        MockLexicon.assert_not_called()
+        mock_hybrid.assert_not_called()
+        mock_vector.assert_called_once()
+        assert "<LEXICON_MISS>" not in result["context"]
+
+    # G. Spanish lexical MISS — query uses the extracted Spanish term, not the
+    # full Spanish conversational sentence, and includes "garifuna" as signal
+    def test_G_spanish_lexical_miss_uses_term_based_query(self):
+        with patch(_PATCH) as MockLexicon, \
+             patch.object(self.nodes, "_hybrid_retrieve", return_value=_RAG_DOCS) as mock_hybrid:
+            MockLexicon.return_value.lookup.return_value = []
+            result = _run(self.nodes.global_retrieval_process(
+                _make_state("¿Cómo se dice padre en garífuna?")
+            ))
+
+        mock_hybrid.assert_called_once()
+        query_used = mock_hybrid.call_args.kwargs["query"]
+        # RP10: extracted Spanish term used as retrieval signal, not the
+        # full conversational sentence. Term alone is correct for both
+        # English and Spanish (same corpus-omnipresence argument for "garifuna").
+        assert query_used.strip() == "padre"
+        assert "Cómo" not in query_used
+        assert "dice" not in query_used
+        assert "<LEXICON_MISS>" in result["context"]
+        assert "<LEXICON_CONTEXT>" not in result["context"]

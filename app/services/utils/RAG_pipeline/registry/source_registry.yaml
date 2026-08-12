@@ -1,0 +1,600 @@
+# Yurumein AI — RAG Source Registry
+# Phase 2: Source Governance Foundation
+#
+# This file is the authoritative registry for all documents ingested into
+# Yurumein's production PGVector collection (document_collection / yurumein_test).
+#
+# AUTHORITY TIERS:
+#   A — Primary reference for the designated domain. Most reliable available
+#       source. Does not imply academic peer review.
+#   B — Strong secondary / instructional. Identifiable authorship and external
+#       publication, but instructional format or meaningful provenance gaps.
+#       Useful for context and corroboration; not sole basis for factual claims.
+#   C — Contextual / derivative / small-scope. Internally created, derived from
+#       another source, or too limited in scope for primary authority.
+#   U — Unverified / uninspectable. Provenance, content, and/or author unknown.
+#
+# DOMAIN AUTHORITY RATINGS (per domain, same A/B/C/U scale):
+#   N/A — Source does not address this domain at all.
+#
+# VERIFICATION STATUS:
+#   verified            — Content origin confirmed; chain of custody clear.
+#   source inspected    — Source document directly inspected; classification based
+#                         on inspection. Provenance gaps may remain.
+#   partially-verified  — Author confirmed; one or more provenance gaps remain.
+#   unverified          — Insufficient evidence to confirm any provenance.
+#
+# DO NOT modify chunk_count — it reflects the production PGVector state at
+# the time this registry was created (2026-08-09). Update after re-ingestion.
+# DO NOT change source_path — it must match cmetadata.source in PGVector exactly.
+#
+# Last updated: 2026-08-10 (full 469-row automated comparison complete; Source #6 notes updated)
+# Populated by: Initial Phase 2 Source Inspection (Claude Code)
+# Governance review: owner review applied 2026-08-09 — see correction notes inline.
+# Human review required before any field marked UNKNOWN can be promoted.
+
+# ---------------------------------------------------------------------------
+# PROVENANCE RULES — Data origin classification for Yurumein AI
+# Applies to all derived data in yurumein_lexicon and related pipeline tables.
+# Last updated: 2026-08-09
+# ---------------------------------------------------------------------------
+#
+# These rules govern how fields in Yurumein's derived data (yurumein_lexicon,
+# CSV, SQL tables) should be attributed when presented to users or auditors.
+#
+# SOURCE-BACKED
+#   The following field types are directly supported by the ingested source
+#   documents and may be attributed to the source:
+#     - Spanish vocabulary/terms
+#     - Garífuna vocabulary/forms
+#     - Source page references (e.g., "see page N of DICCIONARIO")
+#     - Grammatical or orthographic information explicitly stated in the source
+#     - Language information explicitly stated by the source
+#
+# YURUMEIN-DERIVED
+#   The following field types were added by Yurumein's data-processing or
+#   transformation layer and are NOT backed by any current source document:
+#     - English translations — unless independently supported by a separate
+#       authoritative source (none currently in collection)
+#     - Normalized lookup fields (e.g., lowercase slugs, accent-stripped keys)
+#     - Internal record IDs (lexicon_id, chunk_id, etc.)
+#     - Processing metadata (import date, batch, confidence score, etc.)
+#
+# CONSEQUENCE: any English vocabulary presented to a user that originates from
+# yurumein_lexicon must be attributed as Yurumein-derived, not as a translation
+# claim backed by the DICCIONARIO GARIFUNA or any other source in this registry.
+# ---------------------------------------------------------------------------
+
+sources:
+
+  - source_id: diccionario-garifuna
+    canonical_title: "DIMUREI AGEI - Enriquez"
+    spanish_title: "Diccionario Enriquez"
+    filename: "DICCIONARIO GARIFUNA.pdf"
+    source_path: "app/services/utils/RAG_pipeline/data/new_docs/DICCIONARIO GARIFUNA.pdf"
+    file_type: pdf
+    source_type: bilingual dictionary / lexical reference
+    author: "Elmer Mauricio Enríquez Bermúdez"
+    publisher: "Editoriales C&J'J Enríquez"
+    publication_year: 2020
+    languages:
+      - spanish
+      - garifuna
+    translation_direction: "Spanish → Garífuna"
+    domains:
+      - lexical
+      - grammar
+    provenance: >
+      Author-created Garífuna reference work. Research described by author as
+      conducted approximately 2013–2019; digital edition published in 2020.
+      Self-published by Editoriales C&J'J Enríquez, the author's own publishing
+      house. Offices in New York, USA and Livingston (Barrio Pueblo Nuevo),
+      Guatemala. Affiliated with ASOIHIGA (email: ASOIHIGA@YAHOO.COM; full
+      organization name not spelled out in document). PDF produced with Microsoft
+      Word 2016, finalized 2020-06-27. PDF /Author metadata field reads 'Kelvin'
+      — likely the person who exported the file, not the content author (see notes).
+      No external academic endorsement found within the document.
+    overall_tier: B
+    domain_authority:
+      lexical: A
+      grammar: B
+      historical: "N/A"
+      musical: "N/A"
+      general: B
+    authority_notes: >
+      overall_tier B, domain lexical A. These two ratings mean different things
+      and must not be collapsed.
+
+      LEXICAL A: This is Yurumein's primary available lexical authority for
+      Spanish → Garífuna vocabulary. It is the most comprehensive vocabulary
+      source in the collection (206 pages, grammatically classified entries,
+      ~4,972 chunks) and the explicit foundation for the Phase 1 lexicon pipeline.
+      For vocabulary and translation queries in the Spanish → Garífuna direction,
+      it is the first retrieval candidate and the strongest available evidence.
+
+      OVERALL B: The source is self-published by the author's own house, single-
+      author, no bibliography, no evidence of peer review, and contains an
+      unexplained dual Garifuna column format with unresolved chain-of-custody
+      questions (PDF /Author: 'Kelvin'). These factors mean it does not meet the
+      bar for externally established authoritative source. "Best source Yurumein
+      currently possesses" and "externally validated authority" are not the same
+      claim. Overall B preserves that distinction.
+
+      Tier B for grammar: grammatical framework (abbreviation table, alphabet) is
+      present but limited — not a systematic grammar. N/A for historical and
+      musical: document does not address these domains.
+
+      LANGUAGE SCOPE: This source is a Spanish → Garífuna bilingual dictionary.
+      It is NOT an English source and must not be treated as English lexical
+      authority. Any English translations in yurumein_lexicon were added by
+      Yurumein's pilot data-processing layer and are Yurumein-derived — they are
+      not source-backed by this dictionary. See provenance_rules section.
+    intended_uses:
+      - Spanish → Garífuna lexical evidence
+      - Documented Garífuna vocabulary and forms
+      - Orthographic evidence when explicitly present in the source
+      - Language information explicitly stated by the source
+      - Grammatical classification reference (parts of speech)
+      - First retrieval candidate for vocabulary or translation queries
+    restricted_uses:
+      - English lexical authority
+      - English → Garífuna source
+      - Independent authority for claims outside what the work documents
+      - Sole authority for historical or cultural claims (document contains none)
+      - Authority for claims contested by community or academic sources
+      - Sole authority for phonological rules (grammar section is minimal)
+    verification_status: source inspected
+    page_count: 206
+    chunk_count: 4972
+    notes: >
+      TWO-COLUMN FORMAT — RESOLVED (2026-08-09):
+      The dictionary has three columns per entry:
+        1. IDIOMA ESPAÑOL — Spanish headword + grammatical classification
+        2. SIGNIFICADO EN IDIOMA GARIFUNA — the orthographic/written Garífuna form
+        3. PRONUNCIACIÓN — Spanish-phonological transcription guide (how to say
+           the Garífuna word using Spanish phonological conventions)
+      The two columns are NOT orthographic variants or dialectal forms. They are
+      the same Garífuna word written in (a) its proper orthographic form and
+      (b) a Spanish-reader pronunciation guide. The principal difference:
+      Garífuna 'h' sounds like Spanish 'j', so SIGNIFICADO uses 'h' while
+      PRONUNCIACIÓN substitutes 'j'. Other substitutions follow the same pattern
+      (n → nj, h → j at word boundaries, â → âa for double pronunciation, etc.).
+      CONSEQUENCE: the Yurumein lexicon correctly extracted from the SIGNIFICADO
+      column. See yurumein-lexicon-pilot notes for confirmation and character
+      fidelity details.
+      OPEN: PDF /Author field 'Kelvin' — who is this person and their relationship
+      to the document? Clarify full name and standing of ASOIHIGA organization.
+
+  - source_id: libro-garifuna-serie-i
+    canonical_title: "FURENDEI WAMÁ ABÜRÜHA, AYANUHA LUMA ALIIHA LIDAN GARIFUNA — Garüdia Número Aban (Book 1)"
+    filename: "LIBRO SERIE I.pdf"
+    source_path: "app/services/utils/RAG_pipeline/data/new_docs/LIBRO SERIE I.pdf"
+    file_type: pdf
+    source_type: textbook
+    author: "Elmer Mauricio Enríquez Bermúdez (pen name: ABÜRÜHATI)"
+    publication_year: 2020
+    languages:
+      - spanish
+      - garifuna
+    domains:
+      - grammar
+      - lexical
+      - general
+    provenance: >
+      Published by EDITORIALES C & J'J ENRIQUEZ. Introduction (page 3) signed:
+      "Elmer Mauricio Enriquez Bermudez, Autor & Director Editoriales C&J'J
+      Enriquez". Author states this is his first Garifuna language book, with goal
+      to "Rescatar y Salvaguardar la lecto escritura y de fomentar el aprendizaje
+      del idioma garifuna." Author self-identifies as from Guatemalan Garifuna
+      culture. PDF /Author metadata: 'Mauricio Enriquez'. Finalized 2020-06-27
+      (same date as DICCIONARIO, suggesting a single production run). No external
+      institutional endorsement within this specific book.
+    overall_tier: B
+    domain_authority:
+      lexical: C
+      grammar: B
+      historical: "N/A"
+      musical: "N/A"
+      general: B
+    authority_notes: >
+      Tier B overall: identifiable author, external (self-)publication, coherent
+      pedagogical structure. Grammar Tier B: covers Garifuna alphabet, phonetics,
+      vowels, numbers, and sentence patterns at introductory level. Lexical Tier C:
+      instructional rather than reference format; same author as DICCIONARIO — not
+      an independent corroboration. Significant portions of chunks are
+      worksheet/exercise pages with blank lines and minimal substantive content,
+      which reduces average chunk quality. Not an independent source from the
+      DICCIONARIO — same author and publisher ecosystem.
+    intended_uses:
+      - Grammar and phonetics context for learner-facing queries
+      - Vocabulary in pedagogical/example-sentence context
+      - Background for learning-focused queries about Garifuna language structure
+    restricted_uses:
+      - Primary lexical authority (defer to diccionario-garifuna)
+      - Historical or cultural claims (document contains none)
+      - Contexts where chunk quality is critical (high worksheet/filler content)
+    verification_status: partially-verified
+    page_count: 136
+    chunk_count: 467
+    notes: >
+      Worksheet pages (exercise fill-in sections) will produce low-value chunks.
+      Consider chunk-level quality filtering in a future pipeline enhancement.
+      Same-day PDF production as DICCIONARIO (2020-06-27) likely indicates
+      a single digitization session.
+
+  - source_id: libro-garifuna-serie-ii
+    canonical_title: "FURENDEI WAMÁ AYANUHA ALIIHA LUMA ABÜRÜHA LIDAN GARIFUNA — Garüdia Número Bíama (Book 2)"
+    filename: "LIBRO GARIFUNA II FORMATO DIGITAL.pdf"
+    source_path: "app/services/utils/RAG_pipeline/data/new_docs/LIBRO GARIFUNA II FORMATO DIGITAL.pdf"
+    file_type: pdf
+    source_type: textbook
+    author: "Elmer Mauricio Enríquez Bermúdez (pen name: ABÜRÜHATI)"
+    publication_year: 2013
+    languages:
+      - spanish
+      - garifuna
+    domains:
+      - grammar
+      - historical
+      - lexical
+      - general
+    provenance: >
+      Published by EDITORIALES C & J'J ENRIQUEZ. Introduction (page 4) states the
+      original Book 1 of this series was presented in 2013 at Guatemala's Ministerio
+      de Educación (Sala No. 1, zona 10) before El Viceministro de Educación
+      Bilingüe, UNESCO representatives, and institutions monitoring indigenous
+      languages. This Book 2 continues that series, making its publication_year 2013
+      for the original work. This "FORMATO DIGITAL" edition was digitized and
+      finalized as PDF on 2020-04-14. PDF /Author metadata: 'Delmi' — not the
+      content author; appears to be the digitizer. Whether this digital edition
+      is complete and unaltered relative to the original is UNKNOWN.
+    overall_tier: B
+    domain_authority:
+      lexical: C
+      grammar: B
+      historical: B
+      musical: "N/A"
+      general: B
+    authority_notes: >
+      Tier B overall: same author/publisher as LIBRO I. The series was presented
+      at Guatemala's Ministry of Education with UNESCO representatives present
+      in 2013. GOVERNANCE PRINCIPLE: presence at that event is a provenance data
+      point — it documents public exposure — it is NOT evidence that UNESCO or
+      the Ministry validated the linguistic or historical content of this work.
+      Those are distinct claims. Do not allow "UNESCO was in the room" to elevate
+      the source's content authority above what the evidence supports.
+
+      Historical Tier B: the best available historical source in the current
+      collection, but "best available" does not mean "authoritative." The
+      Garifuna origins narrative (pages 5–9) presents specific dates (1635, 1797,
+      1802) and events but cites no external historical sources. It is the
+      author's account. Historical claims from this source must be attributed
+      explicitly ("According to Enríquez Bermúdez...") and should not be
+      presented as settled history. Academic historiography on Garifuna origins
+      may differ.
+
+      The '/Author: Delmi' metadata field is an unresolved provenance gap for
+      this specific digital edition. Lexical Tier C: instructional format, same
+      author ecosystem as DICCIONARIO — not an independent corroboration.
+    intended_uses:
+      - Historical and cultural context for Garifuna origins queries
+      - Advanced grammar and phonetics (double vowels, long pronunciation)
+      - Garifuna number system and mathematical vocabulary
+      - Cultural background for contextual queries
+    restricted_uses:
+      - Sole authority for historical claims (present as one account, attributed)
+      - Primary lexical authority (defer to diccionario-garifuna)
+      - Claims about the completeness of the digital edition vs. original
+    verification_status: partially-verified
+    page_count: 149
+    chunk_count: 376
+    notes: >
+      HUMAN VERIFY: Who is 'Delmi' (PDF /Author)? Is this digital edition a
+      complete, unaltered reproduction of the 2013 original? publication_year
+      is set to 2013 (original), not 2020 (digitization date). The UNESCO /
+      Ministry of Education context should not be overstated — it documents
+      exposure, not content validation.
+
+  - source_id: yurumein-lexicon-pilot
+    canonical_title: "Yurumein Garífuna Knowledge Base Lexicon — Español / Garífuna (Pilot: A–An)"
+    filename: "Yurumein Lexicon Pilot A-Ab-An.docx"
+    source_path: "Yurumein Lexicon Pilot A-Ab-An.docx"
+    file_type: docx
+    source_type: lexicon_derivative
+    author: UNKNOWN
+    publication_year: 2026
+    languages:
+      - spanish
+      - garifuna
+      - english
+    language_notes: >
+      Spanish and Garífuna content is source-backed — derived from DICCIONARIO
+      GARIFUNA pages 9–20. English is Yurumein-derived: the English column was
+      added by the pilot transformation layer and is not present in or backed by
+      the original DICCIONARIO GARIFUNA, which is a Spanish → Garífuna bilingual
+      source. English entries in this artifact have no independent source authority.
+    domains:
+      - lexical
+    provenance: >
+      Internally created by Yurumein AI project. DOCX created 2026-08-08.
+      The document explicitly declares its own source: "Source: Diccionario
+      Enríquez (Español – Garífuna – Inglés) Pages: 9–20 (letter A, 'Ab'
+      through 'An')". NOTE: the "(Inglés)" in that self-declared title reflects
+      the English column added during transformation — it is not a trilingual
+      attribute of the original dictionary. The DICCIONARIO GARIFUNA is a
+      Spanish → Garífuna bilingual source; see diccionario-garifuna registry entry.
+      This artifact is a structured re-encoding of DICCIONARIO GARIFUNA pages
+      9–20 into table format with Pg, Español, Garífuna (forms), English, and POS
+      columns. Total entries: 469, matching yurumein_lexicon_469.csv exactly.
+      DOCX dc:creator: 'Un-named'. The CSV equivalent is the source for the
+      yurumein_lexicon SQL table (Phase 1 pipeline).
+    overall_tier: C
+    domain_authority:
+      lexical: C
+      grammar: "N/A"
+      historical: "N/A"
+      musical: "N/A"
+      general: "N/A"
+    authority_notes: >
+      This source is a transformation artifact, not an independent knowledge
+      authority. It sits at an intermediate step of the ingestion pipeline:
+
+        DICCIONARIO GARIFUNA (pages 9–20)
+            → structured re-encoding (this DOCX)
+            → reviewed CSV (yurumein_lexicon_469.csv)
+            → SQL lexicon table (Phase 1)
+
+      Its Tier C rating reflects that it adds no linguistic evidence beyond what
+      the DICCIONARIO already contains. It is the same vocabulary, restructured.
+      The intermediate DOCX competes for embeddings with its own parent source
+      for the same A–An entries, which creates retrieval noise without adding
+      authority. The appropriate long-term position for this artifact is as
+      an audit/lineage document, not a semantic RAG source.
+
+      FUTURE ACTION (not now — do not delete during governance phase): this
+      source should eventually be removed from the RAG collection. Its lineage
+      role is already served by the CSV and the SQL table. No deletion until the
+      registry is finalized and retrieval governance is implemented.
+    intended_uses:
+      - Cross-reference for structured lexical entries with page numbers
+      - Audit trail linking yurumein_lexicon entries back to source pages
+      - Validation that Phase 1 lexicon entries match source document
+    restricted_uses:
+      - Any claim not covered by DICCIONARIO pages 9–20
+      - Independent authority for vocabulary not in the Diccionario
+      - Primary retrieval candidate (DICCIONARIO is the authority source)
+    verification_status: source inspected
+    page_count: UNKNOWN
+    chunk_count: 39
+    notes: >
+      COLUMN EXTRACTION CONFIRMED — FULL 469-ROW COMPARISON (2026-08-10):
+      Automated comparison of all 469 CSV garifuna values against the DICCIONARIO
+      SIGNIFICADO EN IDIOMA GARIFUNA column (pages 8–20). Results:
+        Total CSV rows               : 469
+        Not found in dict pages 8-20 :  82  (expected — gender variants, pronoun
+                                              conjugations, '(var.)' extensions,
+                                              and phrases beyond basic headwords)
+        Matched in dict              : 387
+          Confirmed correct SIGNI    : 367  (94.8% of matched entries)
+          Genuine exceptions         :  20
+
+      CONFIRMED WRONG COLUMN (1 entry):
+        Albino — CSV='Liróü weyu' matches PRONUNCIACIÓN; correct SIGNIFICADO is
+        'Liráü weyu'. Confirmed wrong-column extraction for this entry (ó vs á).
+
+      CHARACTER SUBSTITUTION (~8-10 entries, same classes as prior findings):
+        â → á  : Abortar (Ágüriâgua→Ágüriágua), Agua caliente (sûti→süti)
+        ê → ë  : Aborrecer (Íyerêgun→Íyerëgun)
+        accent missing: Animal (Anímalu→Animalu), Amarga (Gífitu→Gifitu),
+                        Ahijada (Iámasiri→Íamasiri)
+        vowel diff: Angosta (Bürüraüraütu→Bürüraürütu)
+      No new substitution class found beyond ÿ→Y, â→á, ñ→n already documented.
+      These are DOCX creation artifacts, not column selection errors.
+
+      FORM DIFFERENCES (4 notable entries):
+        Aclarar — CSV has 'Apúleinida' not found in dict pages 8-20;
+          'Arugougada' is a compressed form of dict's 'Arugoundagüda'.
+          Possible: 'Apúleinida' is from a different section or is a pilot add.
+        Además  — CSV='Gama lumoun....' has trailing ellipsis chars (cosmetic
+          artifact); Garífuna value 'Gama lumoun' matches correctly.
+        Alemán/Alemana/Alemania — CSV uses condensed parenthetical form; dict has
+          verbose form. Garífuna core word 'Yámani' is identical in both.
+        Angosta — CSV='Bürüraürütu'; dict='Bürüraüraütu, Bürüraütu'.
+          Possible alternate valid form or vowel compression artifact.
+
+      MULTIPLE FORMS PER SPANISH ENTRY (confirmed at scale):
+        The DICCIONARIO sometimes has multiple entries for the same Spanish headword.
+        Example: 'Adorar' appears twice — SIGNI 'Ahinsiñeda' (first) and
+        SIGNI 'Alawaha' (second). The pilot captured one instance per headword;
+        both forms are linguistically valid. The uncaptured form is absent from
+        the SQL lexicon. This is a systematic gap across the pilot, not an error.
+
+      82 NOT-FOUND ENTRIES (expected, not errors):
+        These CSV entries have no basic headword match in dict pages 8-20 because
+        they represent pronoun conjugations (Acerca de él/ella/ti/ustedes),
+        gendered variants (Adolescente hombre/mujer), temporal phrases (Ahora,
+        Anoche), locative phrases (A casa, A casa de él), seasonal names (Agosto),
+        loanword entries (Achiote), and (var.) alternates. These are pilot
+        extensions beyond basic dictionary headwords — appropriately included in
+        the lexicon but outside the scope of this source comparison.
+
+      DESIGN RULE (confirmed by this audit):
+        NEVER ingest the PRONUNCIACIÓN column into the canonical garifuna field.
+        SIGNIFICADO is the orthographic lexical source; PRONUNCIACIÓN is separate
+        metadata. Applies to all future A-Z scaling.
+
+      OPEN: Who created this document (dc:creator 'Un-named')? Creator identity
+      required for audit trail. The 39 RAG chunks may produce retrieval noise
+      competing with diccionario-garifuna chunks for the same A–An entries.
+      Consider restricting RAG inclusion to the lexicon SQL table only (future).
+
+  - source_id: garifuna-language-overview
+    canonical_title: UNKNOWN
+    filename: "Garifuna Language Overview.pdf"
+    source_path: "app/services/utils/RAG_pipeline/data/new_docs/Garifuna Language Overview.pdf"
+    file_type: pdf
+    source_type: UNKNOWN
+    author: UNKNOWN
+    publication_year: UNKNOWN
+    languages:
+      - UNKNOWN
+    domains:
+      - general
+    provenance: UNKNOWN
+    overall_tier: U
+    domain_authority:
+      lexical: U
+      grammar: U
+      historical: U
+      musical: "N/A"
+      general: U
+    authority_notes: >
+      Cannot be assessed. File is absent from local environment and requires
+      production VPS access to inspect. Only 6 chunks in production (~4,800
+      characters of content — very short document). Tier U assigned because
+      content, author, date, and provenance are all unknown. Until inspected,
+      no claim derived solely from this source should be presented as
+      authoritative in any domain.
+    intended_uses:
+      - PENDING: Determine after inspection
+    restricted_uses:
+      - Any authoritative claim in any domain until inspected and verified
+    verification_status: unverified
+    page_count: UNKNOWN
+    chunk_count: 6
+    notes: >
+      HUMAN ACTION REQUIRED — PRIORITY: Retrieve this file from production VPS.
+      Inspect content, metadata, and provenance. Update all UNKNOWN fields.
+      Until completed, flag any retrieved chunk from this source as Tier U
+      in responses. Possible origin hypothesis: brief introductory overview
+      document (given 6-chunk / ~4,800-character size), but this is speculation.
+
+  - source_id: musical-instruments-dataset
+    canonical_title: "Musical Instruments in Garífuna"
+    filename: "Garifuna_Musical_Instruments_Dataset.pdf.pdf"
+    source_path: "app/services/utils/RAG_pipeline/data/new_docs/Garifuna_Musical_Instruments_Dataset.pdf.pdf"
+    file_type: pdf
+    source_type: vocabulary dataset / internally generated
+    author: UNKNOWN
+    # dc:creator reads 'python-docx' — this is the generation library, not a human author.
+    publication_year: 2026
+    # Year 2026 is the PDF export date (2026-04-24) used as proxy.
+    # DOCX internal timestamp 2013-12-23 is a python-docx library default — not authentic.
+    languages:
+      - garifuna
+      - spanish
+      - english
+    language_notes: >
+      Garífuna and Spanish content reflects the vocabulary entries as recorded
+      in the dataset. English is internally derived — added by the unknown human
+      compiler with no cited source. Spanish is similarly uncited. No external
+      authority backs any language content in this artifact. All entries are
+      unverified against any external source.
+    document_structure: >
+      Seven entries in paragraph-based key:value format (no tables), separated
+      by --- dividers. Each entry contains: ENTRY ID, GARIFUNA, PRONUNCIATION,
+      SPANISH, ENGLISH, TYPE. Document header declares: TITLE (Musical
+      Instruments in Garífuna), CATEGORY (Vocabulary – Music), LEVEL (Beginner).
+      No bibliography, citations, publisher, or author attribution present.
+    domains:
+      - musical
+      - lexical
+    provenance: >
+      Internally generated. DOCX source file (Garifuna_Musical_Instruments_Dataset.docx)
+      created programmatically with python-docx (dc:creator: 'python-docx';
+      dc:description: 'generated by python-docx'). DOCX internal timestamps
+      (created and modified: 2013-12-23 23:15:00 UTC) are python-docx library
+      defaults — not authentic creation dates. PDF exported via Google Apps
+      (Skia/PDF m149) on 2026-04-24. No external source cited within the
+      document for any of the 7 entries. The human who compiled the vocabulary
+      is unknown. No title page, bibliography, publisher, or external attribution
+      of any kind is present in the document.
+    overall_tier: C
+    domain_authority:
+      lexical: C
+      grammar: "N/A"
+      historical: "N/A"
+      musical: C
+      general: "N/A"
+    authority_notes: >
+      Tier C because: (1) programmatically generated with python-docx,
+      (2) no external source cited for any of the 7 entries, (3) human compiler
+      unknown — no audit trail, (4) GARIFUNA/PRONUNCIATION column discrepancies
+      in 4 of 7 entries, with no explanation of what the PRONUNCIATION column
+      represents.
+
+      GARIFUNA / PRONUNCIATION DISCREPANCIES (verbatim from source document):
+        001: GARIFUNA: Tagei bugudura
+             PRONUNCIATION: Taguei bugudura
+        003: GARIFUNA: Garawaün aban luma biama
+             PRONUNCIATION: Garawoün aba luma biama
+        004: GARIFUNA: Wadabágei
+             PRONUNCIATION: Wadabáguei
+        007: GARIFUNA: Gídara
+             PRONUNCIATION: Guídara
+      The document provides no explanation of whether PRONUNCIATION represents
+      phonetics, alternate orthography, dialectal variation, Spanish-influenced
+      romanization, or data-entry error. These interpretations are irresolvable
+      from the document alone. This source must not be cited as pronunciation
+      authority until the column semantics are externally confirmed.
+
+      ENTRY 007 — GÍDARA / GUITAR: Gídara/guitar is recorded by this dataset,
+      but its spelling, pronunciation, and cultural usage require independent
+      verification because the dataset provides no citation for this or any entry.
+
+      CLAIM VERIFICATION: The source DOCX has been directly inspected, but the
+      linguistic claims it contains remain unverified. SOURCE INSPECTED ≠ CLAIMS
+      VERIFIED ≠ HIGH AUTHORITY. The Tier C rating, unverified language_notes,
+      and restricted_uses list collectively reflect this distinction. All seven
+      entries should be treated as candidate terms pending external confirmation.
+      [SCHEMA NOTE: a registry-wide claim_verification field would be needed to
+      make this distinction explicit across all sources — flagged for future review,
+      not added here to avoid per-entry schema drift.]
+
+      GOVERNANCE PRINCIPLE: this source may currently be Yurumein's only
+      dedicated musical-instrument vocabulary dataset. Exclusive coverage does
+      not increase evidence quality. "Only available" and "authoritative" are
+      not equivalent. Responses drawing from this source must reflect the
+      provisional, unverified nature of these entries regardless of their
+      exclusive domain coverage.
+
+      EXPECTED RESPONSE BEHAVIOR (conceptual — not yet implemented in retrieval):
+        "Yurumein's current dataset records Sísira for maracas. This entry has
+        not yet been independently verified."
+      That hedging is required by the Tier C status and is not optional even
+      when this is the sole source for the query domain.
+
+      REGISTRY STATUS: PROVISIONALLY LOCKED at Tier C / source inspected.
+      Eligible for reclassification if stronger provenance is discovered.
+    intended_uses:
+      - Musical instrument vocabulary queries as provisional dataset evidence
+      - Narrow vocabulary supplement for cultural or musical contexts
+      - Discovery of candidate terms for later human or source verification
+    restricted_uses:
+      - Pronunciation authority until GARIFUNA/PRONUNCIATION discrepancies are resolved
+      - Claims about musical instruments beyond the seven documented entries
+      - Historical claims about Garífuna music
+      - Broad cultural claims about Garífuna musical traditions
+      - Treating any vocabulary entry as independently verified
+      - Treating exclusive corpus coverage as evidence of authority
+    verification_status: source inspected
+    page_count: 3
+    chunk_count: 3
+    notes: >
+      HUMAN VERIFY — remaining open items (do not block provisional lock):
+        1. Who compiled this vocabulary? 'python-docx' identifies the library,
+           not the human. Compiler identity is required for a complete audit trail.
+        2. What source(s) were used for the 7 entries? No citations exist.
+        3. PRONUNCIATION column semantics: what does it represent? (phonetics /
+           alternate orthography / dialectal variant / romanization / error?)
+        4. Entry 007 (Gídara/Guídara — guitar): spelling, pronunciation, and
+           cultural usage require independent verification — no citation provided.
+        5. Production PGVector chunk content not directly inspected (local DB empty).
+           Confirm chunk text against DOCX via VPS access. Does NOT block lock.
+      DOCX source directly inspected locally (2026-08-09). Ingested PDF is
+      production-only — assumed consistent with DOCX (PDF was exported from it),
+      but not independently confirmed.
+      The double .pdf.pdf extension is a processing artifact — do not normalize.
+      Filename in PGVector must match exactly as recorded in source_path above.
+      DOCX available locally at:
+        ~/Library/Mobile Documents/com~apple~CloudDocs/Garifuna_Musical_Instruments_Dataset.docx
