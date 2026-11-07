@@ -1,36 +1,105 @@
 import json
 import os
-from typing import Dict
+from typing import Dict, Optional, Set
 
 from openai import OpenAI
 
 from .translater_schema import llm_response
 from app.core.config import settings
 from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import VectorStoreManager
+from app.services.lexicon.lexicon import YurumeinLexicon
 
 if not os.environ.get("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+
+_DECLINE_RESPONSE = {
+    "en": (
+        "A verified Garífuna translation is not available for this term. "
+        "Try another word or phrase, or consult a Garífuna language expert."
+    ),
+    "es": (
+        "No hay una traducción garífuna verificada disponible para este término. "
+        "Intenta con otra palabra o frase, o consulta a un experto en el idioma garífuna."
+    ),
+}
+
+
+class TranslationServiceUnavailableError(Exception):
+    """Raised when the upstream AI provider is unavailable (quota, billing, rate-limit)."""
+    pass
 
 
 class Translater:
     def __init__(self):
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self.vector_store = VectorStoreManager()
+        self.lexicon = YurumeinLexicon()
+        self._cached_garifuna_words: Optional[Set[str]] = None
+
+    def _load_garifuna_words(self) -> Set[str]:
+        """Load all verified Garífuna word-forms from the lexicon for context grounding checks."""
+        from sqlalchemy import text as sa_text
+        try:
+            with self.lexicon.engine.connect() as conn:
+                rows = conn.execute(sa_text(
+                    "SELECT garifuna FROM yurumein_lexicon WHERE garifuna IS NOT NULL AND garifuna != ''"
+                )).mappings().all()
+            words: Set[str] = set()
+            for row in rows:
+                for token in (row["garifuna"] or "").split():
+                    w = token.strip(".,;:!?-").lower()
+                    if len(w) > 2:
+                        words.add(w)
+            return words
+        except Exception:
+            return set()
+
+    @property
+    def _garifuna_words(self) -> Set[str]:
+        if self._cached_garifuna_words is None:
+            self._cached_garifuna_words = self._load_garifuna_words()
+        return self._cached_garifuna_words
 
     def _retrieve_context(self, text: str) -> str:
+        """Keyword retrieval from the curated vector store. Returns empty string on miss or error."""
         try:
-            docs = self.vector_store.similarity_search(query=text, k=5)
-            chunks = [doc.page_content for doc in docs if doc.page_content.strip()]
+            docs = self.vector_store.keyword_search(query=text, k=5)
+            chunks = [d["document"] for d in docs if (d.get("document") or "").strip()]
             return "\n---\n".join(chunks)
         except Exception:
             return ""
 
+    def _context_has_garifuna_evidence(self, context: str) -> bool:
+        """Returns True if the context contains at least one verified Garífuna word-form from the lexicon."""
+        ctx_lower = context.lower()
+        return any(word in ctx_lower for word in self._garifuna_words if len(word) > 2)
+
+    def _output_contains_garifuna_forms(self, translation: str) -> bool:
+        """
+        Returns True only when at least one token of the translation is found in the
+        lexicon's garifuna column word set. Anchors validation to labeled Garífuna data,
+        not free-text context position — a Spanish word appearing as a gloss in a
+        bilingual document cannot pass this check.
+        """
+        words = self._garifuna_words
+        if not words:
+            return False
+        # Check the full translation and each comma/semicolon-separated segment
+        segments = {translation.strip().lower()}
+        for sep in (',', ';'):
+            segments.update(seg.strip().lower() for seg in translation.split(sep))
+        for segment in segments:
+            for token in segment.split():
+                w = token.strip(".,;:!?-").lower()
+                if len(w) > 2 and w in words:
+                    return True
+        return False
+
     def get_system_prompt(self, context: str) -> str:
-        context_section = context if context else "No verified context found."
         return f"""You are **Yurumein AI**, a Garífuna language translator.
 
 === VERIFIED GARÍFUNA DICTIONARY CONTEXT ===
-{context_section}
+{context}
 ============================================
 
 ### Translation Rules
@@ -39,10 +108,7 @@ class Translater:
 3. Do not guess, invent, or approximate Garífuna vocabulary or grammar. Garífuna is a living endangered language; inaccuracy causes cultural harm.
 4. Maintain cultural fidelity and preserve traditional Garífuna forms.
 5. Auto-detect input language when unspecified.
-
-### When to decline
-If the verified context above is missing, empty, or does not contain a clear basis for the requested translation, return this exact JSON and nothing else:
-{{"translation": "This word or phrase is not currently available in the Yurumein AI verified Garífuna database. Please try another word or phrase, or consult a Garífuna language expert."}}
+6. CRITICAL — when the target language is Garífuna: your output MUST be a Garífuna word or phrase found in the context above. If the context does not contain a Garífuna equivalent for the requested term, return {{"translation": ""}}. Never return a Spanish or English word as a Garífuna translation. No exceptions.
 
 ### Output format (strict JSON only)
 {{"translation": "str"}}
@@ -59,28 +125,77 @@ Provide only the translated output in {target_language}."""
 
     def get_response(self, translation_info: Dict):
         try:
-            context = self._retrieve_context(translation_info["text"])
+            text = translation_info["text"]
+            base_language = translation_info["base_language"]
+            target_language = translation_info["target_language"]
+            ui_lang = (translation_info.get("ui_language") or "en").strip().lower()
+            decline_msg = _DECLINE_RESPONSE.get(ui_lang, _DECLINE_RESPONSE["en"])
+
+            is_garifuna_target = target_language.lower() == "garifuna"
+
+            # Lexicon-first exact lookup for Garífuna targets.
+            if is_garifuna_target:
+                r = self.lexicon.lookup(text, base_language)
+                if r:
+                    distinct_forms = []
+                    for row in r:
+                        form = (row.get("garifuna") or "").strip()
+                        if form and form not in distinct_forms:
+                            distinct_forms.append(form)
+                    if distinct_forms:
+                        return llm_response(translation="; ".join(distinct_forms))
+
+            # Keyword retrieval from the curated vector store.
+            context = self._retrieve_context(text)
+
+            # No context → verified database gap.
+            if not context:
+                return llm_response(translation=decline_msg)
+
+            # For Garífuna target: context must contain at least one verified Garífuna word.
+            # Spanish-only context cannot support a Garífuna translation.
+            if is_garifuna_target and not self._context_has_garifuna_evidence(context):
+                return llm_response(translation=decline_msg)
+
             messages = [
                 {"role": "system", "content": self.get_system_prompt(context)},
                 {
                     "role": "user",
-                    "content": self.get_user_prompt(
-                        translation_info["base_language"],
-                        translation_info["target_language"],
-                        translation_info["text"],
-                    ),
+                    "content": self.get_user_prompt(base_language, target_language, text),
                 },
             ]
 
             completion = self.client.chat.completions.create(
-                model="gpt-5",
+                model="gpt-4o",
                 messages=messages,
                 response_format={"type": "json_object"},
             )
             raw_output = completion.choices[0].message.content
             data = json.loads(raw_output)
             validated = llm_response(**data)
+
+            translation_text = (validated.translation or "").strip()
+
+            # Empty output means the model found no verified Garífuna equivalent in context
+            # (following the system prompt instruction). Show the localized decline message —
+            # not a 503 toast, which would imply the service is down.
+            if not translation_text:
+                return llm_response(translation=decline_msg)
+
+            # For Garífuna target: validate that the output contains at least one word-form
+            # found in the lexicon's garifuna column. A Spanish word appearing as a gloss
+            # in the retrieved bilingual context cannot pass this check.
+            if is_garifuna_target and not self._output_contains_garifuna_forms(translation_text):
+                return llm_response(translation=decline_msg)
+
             return validated
 
+        except TranslationServiceUnavailableError:
+            raise
         except Exception as e:
-            raise RuntimeError(f"Translation failed: {str(e)}")
+            err = str(e)
+            if "429" in err or "quota" in err.lower() or "credit" in err.lower():
+                raise TranslationServiceUnavailableError(
+                    "Translation service temporarily unavailable. Please try again later."
+                )
+            raise RuntimeError(f"Translation failed: {err}")

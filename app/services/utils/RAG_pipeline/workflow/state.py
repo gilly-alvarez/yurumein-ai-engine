@@ -16,6 +16,7 @@ class ChatState(TypedDict):
     response: Optional[str]
     retrieved_docs: Optional[List[dict]]
     next_node: Optional[str]
+    language: Optional[str]
 
 class ChatSession(BaseModel):
     """Model for chat session metadata"""
