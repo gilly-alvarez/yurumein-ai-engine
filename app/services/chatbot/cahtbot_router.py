@@ -129,7 +129,8 @@ async def chat_simple(
     user_prompt: Annotated[str, Form()],
     user_id: Annotated[str, Form()],
     session_id: Annotated[Optional[str], Form()] = None,
-    upload_file: Annotated[UploadFile, File()] = None, 
+    language: Annotated[Optional[str], Form()] = None,
+    upload_file: Annotated[UploadFile, File()] = None,
     session_manager: SessionManager = Depends(get_session_manager)
 ):
     """
@@ -152,7 +153,8 @@ async def chat_simple(
             "messages": [],
             "response": None,
             "retrieved_docs": None,
-            "next_node": None
+            "next_node": None,
+            "language": language,
         }
         result = await run_workflow(state)
         response_text = result.get("response", "")
