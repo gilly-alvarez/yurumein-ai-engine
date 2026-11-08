@@ -224,3 +224,39 @@ def parse_page_request(text: str) -> PageRequest:
             )
 
     return PageRequest(matched=False, source_pattern=None, display_name=None, pages=())
+
+
+@dataclass
+class BookRequest:
+    matched: bool
+    source_pattern: str | None
+    display_name: str | None
+
+
+def parse_book_request(text: str) -> BookRequest:
+    """
+    Detect when the user explicitly names exactly one recognized book without
+    specific page numbers.
+
+    Returns matched=True when exactly one recognized book alias is present and
+    parse_page_request would NOT already handle the query (i.e., no page-trigger
+    word + integer are both present). Used by nodes.py to trigger source-
+    constrained retrieval (path 2.6).
+    """
+    if not text or not text.strip():
+        return BookRequest(matched=False, source_pattern=None, display_name=None)
+
+    text_lower = text.lower()
+
+    # Count how many distinct books are named.
+    matches = [
+        (source_pattern, display_name)
+        for aliases, source_pattern, display_name in _BOOK_MAP
+        if any(alias in text_lower for alias in aliases)
+    ]
+    if len(matches) != 1:
+        # Zero books or ambiguous multi-book query — do not constrain retrieval.
+        return BookRequest(matched=False, source_pattern=None, display_name=None)
+
+    source_pattern, display_name = matches[0]
+    return BookRequest(matched=True, source_pattern=source_pattern, display_name=display_name)

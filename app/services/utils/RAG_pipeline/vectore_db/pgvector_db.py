@@ -210,6 +210,50 @@ class VectorStoreManager:
             print(f"Page search error: {e}")
             return []
 
+    def source_keyword_search(self, query: str, source_pattern: str, k: int = 8) -> list[dict]:
+        """Keyword search scoped to a specific source document (ILIKE pattern)."""
+        terms = [term for term in re.findall(r"\b\w+\b", query.lower()) if len(term) > 2]
+        if not terms:
+            return []
+
+        score_parts = []
+        where_parts = []
+        params = {
+            "collection_name": self.collection_name,
+            "source_pattern": source_pattern,
+            "limit": k,
+        }
+        for index, term in enumerate(terms):
+            pname = f"term_{index}"
+            score_parts.append(f"CASE WHEN lower(e.document) LIKE :{pname} THEN 1 ELSE 0 END")
+            where_parts.append(f"lower(e.document) LIKE :{pname}")
+            params[pname] = f"%{term}%"
+
+        sql = f"""
+            SELECT e.document, e.cmetadata, ({' + '.join(score_parts)}) AS keyword_score
+            FROM langchain_pg_embedding AS e
+            JOIN langchain_pg_collection AS c ON e.collection_id = c.uuid
+            WHERE c.name = :collection_name
+              AND e.cmetadata->>'source' ILIKE :source_pattern
+              AND ({' OR '.join(where_parts)})
+            ORDER BY keyword_score DESC, length(e.document) ASC
+            LIMIT :limit
+        """
+        try:
+            with self._engine.connect() as conn:
+                rows = conn.execute(text(sql), params).mappings().all()
+            return [
+                {
+                    "document": row["document"],
+                    "metadata": row["cmetadata"] or {},
+                    "keyword_score": float(row["keyword_score"] or 0.0),
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            print(f"Source keyword search error: {e}")
+            return []
+
     def delete_collection(self):
         """Clear all data in this collection."""
         self.vector_store.delete_collection()

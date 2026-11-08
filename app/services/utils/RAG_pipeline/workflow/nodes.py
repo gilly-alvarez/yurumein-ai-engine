@@ -11,7 +11,7 @@ from ..DB.session_manager import SessionManager
 from ..prompt.prompt import system_prompt, user_prompt
 from ..vectore_db.pgvector_db import VectorStoreManager
 from .state import ChatState
-from app.services.chatbot.lexical_parser import parse_lexical_request, parse_definition_request, parse_page_request
+from app.services.chatbot.lexical_parser import parse_lexical_request, parse_definition_request, parse_page_request, parse_book_request
 from app.services.chatbot.intent_router import Intent, detect_intent, preferred_roles_for
 from app.services.chatbot.source_classifier import classify_source, source_display_name
 from app.services.lexicon.lexicon import YurumeinLexicon
@@ -37,7 +37,7 @@ _ROLE_TO_SOURCE_PATTERN: dict[str, str] = {
 
 class Nodes:
     def __init__(self):
-        self.llm = ChatOpenAI(model="gpt-4o", temperature=0.6)
+        self.llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
         self._vector_store = None
 
     @property
@@ -268,14 +268,26 @@ class Nodes:
 
         return sorted(docs, key=effective_score, reverse=True)
 
+    _EID_ABBREV = {
+        "FOUNDATIONAL_LANGUAGE_EDUCATION":        "SERIE_I",
+        "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT": "GAR_II",
+        "DICTIONARY":                             "DICC",
+        "STRUCTURED_LEXICON":                     "LEXICON",
+    }
+
     def _build_context(self, docs: list[dict]) -> str:
         parts = []
         for index, doc in enumerate(docs, start=1):
             metadata = doc.get("metadata") or {}
             source_citation = source_display_name(metadata)
             retrieval_source = doc.get("retrieval_source", "vector")
+            source_path = metadata.get("source", "")
+            page_label = metadata.get("page_label", "")
+            meta = classify_source(source_path)
+            abbrev = self._EID_ABBREV.get(meta.role, "DOC") if meta else "DOC"
+            eid = f"EID-{index}:{abbrev}:p{page_label}" if page_label else f"EID-{index}:{abbrev}"
             parts.append(
-                f"[Source: {source_citation} | Rank: {index} | Retrieval: {retrieval_source}]\n"
+                f"[{eid} | Source: {source_citation} | Retrieval: {retrieval_source}]\n"
                 f"{doc.get('page_content', '')}"
             )
         return "\n\n".join(parts)
@@ -338,6 +350,135 @@ class Nodes:
             f"in the indexed document collection. Those specific page numbers are not "
             f"present. Inform the user accurately that those pages are not available."
         )
+
+    def _source_constrained_hybrid_retrieve(
+        self, query: str, source_pattern: str, top_k: int = 10
+    ) -> list[dict]:
+        """Hybrid retrieval restricted to a single source document."""
+        vector_hits = self.vector_store.source_targeted_search(
+            query=query, source_pattern=source_pattern, k=max(top_k * 2, 10)
+        )
+        keyword_hits = self.vector_store.source_keyword_search(
+            query=query, source_pattern=source_pattern, k=max(top_k * 2, 10)
+        )
+
+        query_term_count = max(
+            len({t for t in re.findall(r"\b\w+\b", query.lower()) if len(t) > 2}), 1
+        )
+        merged: dict[tuple, dict] = {}
+
+        for rank, hit in enumerate(vector_hits, start=1):
+            metadata = dict(hit.get("metadata") or {})
+            content = (hit.get("page_content") or "").strip()
+            if not content:
+                continue
+            dist = float(hit.get("distance", 1.0))
+            semantic_score = 1.0 / (1.0 + max(dist, 0.0))
+            keyword_score = self._keyword_overlap_score(query, content)
+            key = self._doc_key(content, metadata)
+            merged[key] = {
+                "page_content": content,
+                "metadata": metadata,
+                "vector_score": dist,
+                "keyword_score": keyword_score,
+                "hybrid_score": (semantic_score * 0.7) + (keyword_score * 0.3),
+                "retrieval_source": "targeted",
+                "initial_rank": rank,
+            }
+
+        for rank, hit in enumerate(keyword_hits, start=1):
+            metadata = dict(hit.get("metadata") or {})
+            content = (hit.get("document") or "").strip()
+            if not content:
+                continue
+            keyword_score = max(
+                float(hit.get("keyword_score", 0.0)) / query_term_count,
+                self._keyword_overlap_score(query, content),
+            )
+            key = self._doc_key(content, metadata)
+            if key in merged:
+                merged[key]["keyword_score"] = max(merged[key]["keyword_score"], keyword_score)
+                sem = 1.0 / (1.0 + max(float(merged[key].get("vector_score") or 0.0), 0.0))
+                merged[key]["hybrid_score"] = max(
+                    merged[key]["hybrid_score"], (sem * 0.7) + (keyword_score * 0.3)
+                )
+                merged[key]["retrieval_source"] = "hybrid"
+            else:
+                merged[key] = {
+                    "page_content": content,
+                    "metadata": metadata,
+                    "vector_score": None,
+                    "keyword_score": keyword_score,
+                    "hybrid_score": keyword_score * 0.6,
+                    "retrieval_source": "keyword",
+                    "initial_rank": rank,
+                }
+
+        return sorted(merged.values(), key=lambda d: d["hybrid_score"], reverse=True)[:top_k]
+
+    # Pattern: "... and give/show/list/provide ..." splits into two sub-queries.
+    _MULTI_PART_RE = re.compile(
+        r"\band\s+(?:also\s+)?(?:give|show|list|provide|include)\b",
+        re.IGNORECASE,
+    )
+
+    def _decompose_multi_part_query(self, query: str) -> list[str]:
+        """
+        Split a multi-part query into up to 2 sub-queries for separate retrieval.
+
+        Only splits on "... and give/show/list/provide ..." — conservative enough
+        to avoid splitting natural-language compound questions.
+        """
+        parts = self._MULTI_PART_RE.split(query, maxsplit=1)
+        if len(parts) == 2 and len(parts[0].strip()) > 15 and len(parts[1].strip()) > 10:
+            return [parts[0].strip(), parts[1].strip()]
+        return [query]
+
+    def _validate_citations(self, response: str, retrieved_docs: list[dict]) -> str:
+        """
+        Post-generate validation of every **Source:** and [Source: ...] citation.
+
+        Builds an exact lookup of (book_display_lower → {page_label}) from retrieved_docs,
+        then checks every citation in the response against that set. Citations that cannot
+        be verified — wrong book, wrong page, or book not retrieved at all — are replaced
+        in-place with [UNVERIFIED: ...] so they are never presented as confirmed sources.
+        """
+        if not retrieved_docs:
+            return response
+
+        # Build lookup: book_display_lower → {page_label_str, ...}
+        retrieved_pages: dict[str, set[str]] = {}
+        for doc in retrieved_docs:
+            sm = classify_source((doc.get("metadata") or {}).get("source", ""))
+            if sm:
+                page = str((doc.get("metadata") or {}).get("page_label", "") or "")
+                retrieved_pages.setdefault(sm.display.lower(), set()).add(page)
+
+        def _claim_valid(claim: str) -> bool:
+            claim_l = claim.strip().lower()
+            matched_book = next((b for b in retrieved_pages if b in claim_l), None)
+            if not matched_book:
+                return False
+            claimed_pages = re.findall(r"\b(\d+)\b", claim_l)
+            if not claimed_pages:
+                return True  # book-level citation, no page demanded — accept
+            return any(p in retrieved_pages[matched_book] for p in claimed_pages)
+
+        def _fix_bold(m: re.Match) -> str:
+            claim = m.group(1).strip()
+            if _claim_valid(claim):
+                return m.group(0)
+            return f"**Source:** [UNVERIFIED: {claim}]"
+
+        def _fix_bracket(m: re.Match) -> str:
+            claim = m.group(1).strip()
+            if _claim_valid(claim):
+                return m.group(0)
+            return f"[UNVERIFIED: {claim}]"
+
+        result = re.sub(r"\*\*Source:\*\*\s*([^\n*]+)", _fix_bold, response, flags=re.IGNORECASE)
+        result = re.sub(r"\[Source:\s*([^\]]+)\]", _fix_bracket, result, flags=re.IGNORECASE)
+        return result
 
     async def decide_retrieval_path(self, state: ChatState) -> dict:
         if state.get("file"):
@@ -435,6 +576,29 @@ class Nodes:
                     ),
                 }
 
+            # 2.6. Source-constrained retrieval: user named a book but no specific pages.
+            # parse_page_request (2.5) has already returned if pages were specified;
+            # so if we reach here, book_result matches a name-only reference.
+            book_result = parse_book_request(query)
+            if book_result.matched:
+                sub_queries = self._decompose_multi_part_query(query)
+                constrained: dict[tuple, dict] = {}
+                for sub_q in sub_queries:
+                    for chunk in self._source_constrained_hybrid_retrieve(
+                        sub_q, book_result.source_pattern, top_k=8
+                    ):
+                        key = self._doc_key(chunk.get("page_content", ""), chunk.get("metadata") or {})
+                        if key not in constrained or chunk.get("hybrid_score", 0) > constrained[key].get("hybrid_score", 0):
+                            constrained[key] = chunk
+                if constrained:
+                    sorted_constrained = sorted(constrained.values(), key=lambda d: d.get("hybrid_score", 0), reverse=True)
+                    final_constrained = self._filter_low_info(sorted_constrained)[:5]
+                    return {
+                        "context": self._build_context(final_constrained),
+                        "retrieved_docs": final_constrained,
+                    }
+                # No results from the named source → fall through to general retrieval.
+
             # 3. Detect intent and select preferred source roles.
             intent = detect_intent(query)
             preferred = preferred_roles_for(intent)
@@ -443,6 +607,20 @@ class Nodes:
             pool = self._hybrid_retrieve(query=query, top_k=10)
             if not pool:
                 return {"context": "No relevant documents found"}
+
+            # 4b. Multi-part query: also retrieve for the second sub-query so each
+            #     distinct topic gets its own evidence in the pool.
+            sub_queries = self._decompose_multi_part_query(query)
+            if len(sub_queries) > 1:
+                for sub_q in sub_queries[1:]:
+                    sub_pool = self._hybrid_retrieve(query=sub_q, top_k=5)
+                    for doc in sub_pool:
+                        key = self._doc_key(doc.get("page_content", ""), doc.get("metadata") or {})
+                        if not any(
+                            self._doc_key(p.get("page_content", ""), p.get("metadata") or {}) == key
+                            for p in pool
+                        ):
+                            pool.append(doc)
 
             # 5. Guarantee preferred-source coverage via targeted top-up.
             #    This ensures content from the right book reaches the pool
@@ -460,6 +638,24 @@ class Nodes:
                 ranked = filtered
 
             final_docs = ranked[:5]
+
+            # 7b. Guarantee at least one chunk from the top preferred role is present.
+            # This ensures that intent-routed queries (e.g. cultural → Garífuna II)
+            # always surface book-specific context even when Diccionario terms score
+            # higher in the global hybrid pool.
+            if preferred and final_docs:
+                top_role = preferred[0]
+                has_preferred = any(
+                    (m := classify_source((d.get("metadata") or {}).get("source", "")))
+                    and m.role == top_role
+                    for d in final_docs
+                )
+                if not has_preferred:
+                    for doc in ranked[5:]:
+                        m = classify_source((doc.get("metadata") or {}).get("source", ""))
+                        if m and m.role == top_role:
+                            final_docs = final_docs[:-1] + [doc]
+                            break
 
             return {
                 "context": self._build_context(final_docs),
@@ -523,7 +719,10 @@ class Nodes:
                 query=user_query,
             )
             response = await self.llm.ainvoke(prompt)
-            return {"response": response.content}
+            validated = self._validate_citations(
+                response.content, state.get("retrieved_docs") or []
+            )
+            return {"response": validated}
         except Exception as e:
             print(f"LLM call error: {e}")
             return {"response": f"Error generating response: {str(e)}"}
