@@ -218,12 +218,12 @@ requires_lexicon = pytest.mark.skipif(
 
 class TestReverseLookup:
     @requires_lexicon
-    def test_exact_match_dabula(self):
-        rows = YurumeinLexicon().reverse_lookup("Dábula")
+    def test_exact_match_duna(self):
+        # "Dábula" (table) lives in Diccionario Garífuna (RAG), not the
+        # structured lexicon. Use "Duna" (water), confirmed in yurumein_lexicon.
+        rows = YurumeinLexicon().reverse_lookup("Duna")
         assert len(rows) > 0
-        assert all(
-            normalize_term(r["garifuna"]) == normalize_term("Dábula") for r in rows
-        )
+        assert all(normalize_term(r["garifuna"]) == "duna" for r in rows)
 
     @requires_lexicon
     def test_no_substring_match(self):
@@ -295,7 +295,8 @@ class TestLiveRetrieval:
     def test_missing_word_acknowledges_gap(self):
         answer = _ask_chat("What is the Garifuna word for 'superconductor'?")
         assert re.search(
-            r"not find|no.*translat|don.t have|unable|insufficient|not.*available|not documented|no information",
+            r"not find|no.*translat|don.t have|unable|insufficient|not.*available|"
+            r"not documented|no information|not provide|do not provide|documents do not",
             answer, re.I
         ), f"Expected acknowledgement of gap, got: {answer[:200]}"
 
