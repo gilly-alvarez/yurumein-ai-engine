@@ -11,8 +11,18 @@ from ..DB.session_manager import SessionManager
 from ..prompt.prompt import system_prompt, user_prompt
 from ..vectore_db.pgvector_db import VectorStoreManager
 from .state import ChatState
-from app.services.chatbot.lexical_parser import parse_lexical_request
+from app.services.chatbot.lexical_parser import parse_lexical_request, parse_definition_request
+from app.services.chatbot.intent_router import Intent, detect_intent, preferred_roles_for
+from app.services.chatbot.source_classifier import classify_source, source_display_name
 from app.services.lexicon.lexicon import YurumeinLexicon
+
+# Chunks shorter than this are likely blank worksheet lines or headers.
+# They are deprioritized unless no better content is available.
+_MIN_CHUNK_CHARS = 80
+
+# Boost multipliers applied to chunks whose source role matches the
+# preferred roles for the detected intent.
+_BOOST_BY_RANK = [1.4, 1.25, 1.1]
 
 
 class Nodes:
@@ -135,16 +145,60 @@ class Nodes:
         )
         return ranked_results[:top_k]
 
+    def _vector_retrieve(self, query: str, top_k: int = 5) -> list[dict]:
+        docs = self.vector_store.similarity_search(query=query, k=top_k)
+        results = []
+        for index, doc in enumerate(docs, start=1):
+            results.append(
+                {
+                    "page_content": (doc.page_content or "").strip(),
+                    "metadata": dict(doc.metadata or {}),
+                    "vector_score": None,
+                    "keyword_score": 0.0,
+                    "hybrid_score": 0.0,
+                    "retrieval_source": "vector",
+                    "initial_rank": index,
+                }
+            )
+        return [item for item in results if item["page_content"]]
+
+    def _filter_low_info(self, docs: list[dict]) -> list[dict]:
+        """Deprioritize chunks that are likely worksheet noise (too short)."""
+        meaningful = [d for d in docs if len(d.get("page_content", "")) >= _MIN_CHUNK_CHARS]
+        # Always return at least something; never return empty list.
+        return meaningful if meaningful else docs
+
+    def _boost_by_source_role(self, docs: list[dict], preferred_roles: list[str]) -> list[dict]:
+        """
+        Re-rank docs by applying a multiplier to chunks whose source role
+        matches the preferred roles for the detected intent.
+
+        First preferred role gets the highest boost; subsequent roles get
+        progressively smaller boosts. Unpreferred sources are not penalized.
+        """
+        role_boost: dict[str, float] = {}
+        for i, role in enumerate(preferred_roles):
+            boost = _BOOST_BY_RANK[i] if i < len(_BOOST_BY_RANK) else 1.05
+            role_boost[role] = boost
+
+        def effective_score(doc: dict) -> float:
+            base = doc.get("hybrid_score") or 0.0
+            source_path = (doc.get("metadata") or {}).get("source", "")
+            meta = classify_source(source_path)
+            if meta and meta.role in role_boost:
+                return base * role_boost[meta.role]
+            return base
+
+        return sorted(docs, key=effective_score, reverse=True)
+
     def _build_context(self, docs: list[dict]) -> str:
         parts = []
         for index, doc in enumerate(docs, start=1):
             metadata = doc.get("metadata") or {}
-            source = metadata.get("filename") or metadata.get("source") or "unknown"
-            page_number = metadata.get("page_number", metadata.get("page"))
-            page_label = f" | Page: {page_number}" if page_number is not None else ""
+            source_citation = source_display_name(metadata)
             retrieval_source = doc.get("retrieval_source", "vector")
             parts.append(
-                f"[Source: {source}{page_label} | Rank: {index} | Retrieval: {retrieval_source}]\n"
+                f"[Source: {source_citation} | Rank: {index} | Retrieval: {retrieval_source}]\n"
                 f"{doc.get('page_content', '')}"
             )
         return "\n\n".join(parts)
@@ -163,22 +217,26 @@ class Nodes:
             "</LEXICON_CONTEXT>"
         )
 
-    def _vector_retrieve(self, query: str, top_k: int = 5) -> list[dict]:
-        docs = self.vector_store.similarity_search(query=query, k=top_k)
-        results = []
-        for index, doc in enumerate(docs, start=1):
-            results.append(
-                {
-                    "page_content": (doc.page_content or "").strip(),
-                    "metadata": dict(doc.metadata or {}),
-                    "vector_score": None,
-                    "keyword_score": 0.0,
-                    "hybrid_score": 0.0,
-                    "retrieval_source": "vector",
-                    "initial_rank": index,
-                }
-            )
-        return [item for item in results if item["page_content"]]
+    def _build_definition_context(self, term: str, rows: list[dict]) -> str:
+        """Build lexicon context for a Garífuna → EN/ES reverse lookup."""
+        if not rows:
+            return ""
+        parts = []
+        for row in rows:
+            line = [f"Garífuna: {row['garifuna']}"]
+            if row.get("english"):
+                line.append(f"English: {row['english']}")
+            if row.get("spanish"):
+                line.append(f"Spanish: {row['spanish']}")
+            parts.append(" | ".join(line))
+        forms_text = "\n".join(f"- {p}" for p in parts)
+        return (
+            "<LEXICON_CONTEXT>\n"
+            f"Source: yurumein_lexicon\n"
+            f"Query: {term}\n"
+            f"Documented entries:\n{forms_text}\n"
+            "</LEXICON_CONTEXT>"
+        )
 
     async def decide_retrieval_path(self, state: ChatState) -> dict:
         if state.get("file"):
@@ -219,7 +277,14 @@ class Nodes:
             return {"context": f"Error processing file: {str(e)}"}
 
     async def global_retrieval_process(self, state: ChatState) -> dict:
-        """Retrieve context: lexicon-first for translation queries, RAG otherwise."""
+        """
+        Source-aware retrieval.
+
+        Priority order:
+          1. Exact translation match  → structured lexicon (direct, no RAG)
+          2. Definition match         → lexicon reverse lookup, then RAG
+          3. All other queries        → hybrid RAG with source-role boosting
+        """
         try:
             messages = state.get("messages", [])
             user_query = state.get("user_query", "")
@@ -228,23 +293,47 @@ class Nodes:
             if not query:
                 return {"context": "No query provided"}
 
+            # 1. Translation request: exact pattern → lexicon, skip RAG.
             parse_result = parse_lexical_request(query)
             if parse_result.matched:
                 rows = YurumeinLexicon().lookup(parse_result.term, parse_result.language)
                 if rows:
-                    lexicon_context = self._build_lexicon_context(
-                        parse_result.term, parse_result.language, rows
-                    )
-                    if lexicon_context:
-                        return {"context": lexicon_context}
+                    ctx = self._build_lexicon_context(parse_result.term, parse_result.language, rows)
+                    if ctx:
+                        return {"context": ctx}
 
-            retrieved_docs = self._vector_retrieve(query=query, top_k=5)
+            # 2. Definition request: attempt reverse lexicon lookup first.
+            def_result = parse_definition_request(query)
+            if def_result.matched:
+                rows = YurumeinLexicon().reverse_lookup(def_result.term)
+                if rows:
+                    ctx = self._build_definition_context(def_result.term, rows)
+                    if ctx:
+                        return {"context": ctx}
+
+            # 3. Detect intent and select preferred source roles.
+            intent = detect_intent(query)
+            preferred = preferred_roles_for(intent)
+
+            # 4. Hybrid retrieval: vector + keyword merged and re-ranked.
+            retrieved_docs = self._hybrid_retrieve(query=query, top_k=10)
             if not retrieved_docs:
                 return {"context": "No relevant documents found"}
 
+            # 5. Filter low-information chunks (blank worksheets, bare headers).
+            filtered = self._filter_low_info(retrieved_docs)
+
+            # 6. Boost chunks from preferred sources for this intent.
+            if preferred:
+                ranked = self._boost_by_source_role(filtered, preferred)
+            else:
+                ranked = filtered
+
+            final_docs = ranked[:5]
+
             return {
-                "context": self._build_context(retrieved_docs),
-                "retrieved_docs": retrieved_docs,
+                "context": self._build_context(final_docs),
+                "retrieved_docs": final_docs,
             }
         except Exception as e:
             print(f"Retrieval error: {e}")
