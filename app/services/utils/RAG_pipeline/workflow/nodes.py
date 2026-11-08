@@ -143,7 +143,7 @@ class Nodes:
                     "metadata": metadata,
                     "vector_score": None,
                     "keyword_score": keyword_score,
-                    "hybrid_score": keyword_score * 0.3,
+                    "hybrid_score": keyword_score * 0.6,
                     "retrieval_source": "keyword",
                     "initial_rank": rank,
                 }

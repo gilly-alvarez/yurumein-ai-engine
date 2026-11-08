@@ -338,6 +338,28 @@ class TestLiveRetrieval:
         )
 
     @requires_service
+    def test_chuluguau_badari_retrievable(self):
+        # Regression: "Ch\u00fcl\u00fcgua\u00fc badari" (llegó tú novio) is
+        # an exercise example on page 29 of Libro Garifuna II. keyword_search
+        # finds it at rank 1 but the old hybrid_score = keyword * 0.3 buried it
+        # below rank 20. Fix: keyword-only entries now score keyword * 0.6.
+        sentence = "Ch\u00fcl\u00fcgua\u00fc badari"
+        matches = _ask_retrieval(sentence, k=10)
+        page29 = [
+            m for m in matches
+            if "GARIFUNA II" in m.get("metadata", {}).get("source", "").upper()
+            and str(m.get("metadata", {}).get("page_label", "")) == "29"
+        ]
+        assert len(page29) >= 1, (
+            "Page 29 of Libro Garifuna II not found in top-10. "
+            "Keyword-only retrieval scoring may be broken."
+        )
+        combined = " ".join(m.get("content", "") for m in page29)
+        assert re.search(r"badari", combined, re.I), (
+            "Page-29 chunk does not contain expected sentence"
+        )
+
+    @requires_service
     def test_page_citations_are_plausible(self):
         answer = _ask_chat("How do Garifuna syllables work?")
         pages = [int(m) for m in re.findall(r"page\s+(\d+)", answer, re.I)]
