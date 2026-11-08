@@ -28,25 +28,37 @@ class YurumeinLexicon:
 
     def reverse_lookup(self, term: str) -> list:
         """
-        Garífuna → EN/ES lookup.
+        Garífuna → EN/ES lookup by exact normalized form only.
 
-        Tries exact case-insensitive match first, then substring match.
-        Used for definition queries ("What does X mean?").
+        Matches complete Garífuna words, not substrings. Both the query term
+        and the stored garifuna value are run through normalize_term() before
+        comparison to handle accent/case variants.
+
+        Strategy: fetch all stored entries whose first character matches
+        (narrowing the scan), then filter in Python by normalized equality.
+        Returns empty when the term is not an exact stored form.
         """
         norm = normalize_term(term)
         if not norm:
             return []
-        sql_exact = text(
-            "SELECT * FROM yurumein_lexicon WHERE lower(garifuna) = :term LIMIT 10"
-        )
-        sql_contains = text(
-            "SELECT * FROM yurumein_lexicon WHERE lower(garifuna) LIKE :term LIMIT 10"
+
+        # Pull rows whose garifuna value starts with the same first character
+        # (after lowercasing). This avoids a full-table scan while still
+        # handling accent variants that survive lowercase but not normalize_term.
+        prefix = norm[0]
+        sql = text(
+            "SELECT * FROM yurumein_lexicon "
+            "WHERE lower(garifuna) LIKE :prefix "
+            "LIMIT 500"
         )
         with self.engine.connect() as conn:
-            rows = [dict(r) for r in conn.execute(sql_exact, {"term": norm}).mappings().all()]
-            if not rows:
-                rows = [
-                    dict(r)
-                    for r in conn.execute(sql_contains, {"term": f"%{norm}%"}).mappings().all()
-                ]
-        return rows
+            candidates = [
+                dict(r)
+                for r in conn.execute(sql, {"prefix": f"{prefix}%"}).mappings().all()
+            ]
+
+        # Exact match only: normalize the stored form and compare.
+        return [
+            row for row in candidates
+            if normalize_term(row.get("garifuna", "")) == norm
+        ]

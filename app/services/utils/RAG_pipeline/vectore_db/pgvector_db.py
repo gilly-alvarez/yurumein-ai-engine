@@ -69,6 +69,63 @@ class VectorStoreManager:
             print(f"Search with score error: {e}")
             return []
 
+    def source_targeted_search(
+        self,
+        query: str,
+        source_pattern: str,
+        k: int = 5,
+    ) -> List[dict]:
+        """
+        Semantic search scoped to chunks whose source path matches source_pattern.
+
+        source_pattern is an ILIKE expression, e.g. '%LIBRO SERIE I%'.
+        Returns dicts with page_content, metadata, and cosine distance score.
+
+        Used to guarantee that content from a preferred source enters the
+        retrieval pool for intent-routed queries, regardless of whether it
+        scored in the top-k of the global hybrid search.
+        """
+        try:
+            query_embedding = self.embeddings.embed_query(query)
+            vec_literal = "[" + ",".join(str(v) for v in query_embedding) + "]"
+
+            sql = f"""
+                SELECT
+                    e.document,
+                    e.cmetadata,
+                    (e.embedding <=> '{vec_literal}'::vector) AS distance
+                FROM langchain_pg_embedding AS e
+                JOIN langchain_pg_collection AS c ON e.collection_id = c.uuid
+                WHERE c.name = :collection_name
+                  AND e.cmetadata->>'source' ILIKE :source_pattern
+                  AND length(e.document) >= 80
+                ORDER BY e.embedding <=> '{vec_literal}'::vector
+                LIMIT :k
+            """
+
+            with self._engine.connect() as conn:
+                rows = conn.execute(
+                    text(sql),
+                    {
+                        "collection_name": self.collection_name,
+                        "source_pattern": source_pattern,
+                        "k": k,
+                    },
+                ).mappings().all()
+
+            return [
+                {
+                    "page_content": row["document"] or "",
+                    "metadata": row["cmetadata"] or {},
+                    "distance": float(row["distance"] or 1.0),
+                }
+                for row in rows
+                if (row["document"] or "").strip()
+            ]
+        except Exception as e:
+            print(f"Source targeted search error: {e}")
+            return []
+
     def keyword_search(self, query: str, k: int = 8) -> List[dict]:
         """Lexical search over stored chunk text for exact-term recall."""
         terms = [term for term in re.findall(r"\b\w+\b", query.lower()) if len(term) > 2]
