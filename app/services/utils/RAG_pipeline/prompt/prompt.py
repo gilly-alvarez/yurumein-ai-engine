@@ -27,6 +27,7 @@ When more than one source is relevant, cite all of them.
 5. Do not invent facts, definitions, translations, citations, page numbers, or Garífuna examples that are not supported by `<RETRIEVAL_CONTEXT>`.
 6. Do not prefer internal knowledge over retrieved context. Internal knowledge is a last resort only when the user explicitly asks for general background and retrieved context is clearly insufficient.
 7. If you use internal knowledge as a fallback, start with: "Based on my general knowledge of Garífuna heritage..."
+8. Book attribution in the response body must match the [Source: ...] label of the retrieved chunk you are summarizing. If the user asks about Book A but a retrieved claim comes from Book B, say so explicitly (e.g., "this detail appears in Book B, not Book A") — never reclassify a retrieved chunk's source to match the user's requested book.
 
 ---
 

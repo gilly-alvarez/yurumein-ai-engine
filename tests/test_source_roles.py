@@ -359,6 +359,40 @@ class TestLiveRetrieval:
             "Page-29 chunk does not contain expected sentence"
         )
 
+
+    @requires_service
+    def test_duguu_duration_not_falsely_attributed_to_garifuna_ii(self):
+        # Libro Garífuna II mentions Dügü and Chugú only as a brief list
+        # (page 6) and in a house-types table (page 105). It never states
+        # the seven-day duration or the animal offerings. Those details
+        # exist only in Libro Serie I, page 128.
+        #
+        # Failure mode: LLM attributes Serie I content to "Libro Garífuna II"
+        # in the response body, following the user's framing.
+        #
+        # Test strategy: scan sentence by sentence. A sentence that mentions
+        # Garífuna II AND a duration (seven / siete) WITHOUT a negation word
+        # is a false attribution. A correct response either says Garífuna II
+        # does not specify (negation present) or names Serie I as the source.
+        answer = _ask_chat(
+            "According to Libro Garifuna II, how long does the Duguu ceremony last?"
+        )
+        sentences = re.split(r'(?<=[.!?])\s+', answer)
+        for sentence in sentences:
+            names_garifuna_ii = bool(re.search(r"gar[ií]funa\s+ii", sentence, re.I))
+            claims_duration = bool(re.search(r"\bseven\b|\bsiete\b|7\s*days?", sentence, re.I))
+            has_negation = bool(re.search(
+                r"\b(?:not|no|never|doesn'?t|does\s+not|without|"
+                r"not\s+specif|not\s+state|not\s+mention|no\s+specif)\b",
+                sentence, re.I,
+            ))
+            assert not (names_garifuna_ii and claims_duration and not has_negation), (
+                "LLM made an affirmative attribution of seven-day duration to "
+                "Libro Garífuna II. That claim exists only in Libro Serie I, "
+                f"page 128.\nOffending sentence: {sentence!r}\n"
+                f"Full response: {answer[:400]}"
+            )
+
     @requires_service
     def test_page_citations_are_plausible(self):
         answer = _ask_chat("How do Garifuna syllables work?")
