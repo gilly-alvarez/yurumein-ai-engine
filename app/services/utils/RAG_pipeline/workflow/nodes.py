@@ -436,45 +436,49 @@ class Nodes:
 
     def _validate_citations(self, response: str, retrieved_docs: list[dict]) -> str:
         """
-        Post-generate check: if the response body claims a book name that was
-        not among the retrieved documents, append a retrieval note.
+        Post-generate validation of every **Source:** and [Source: ...] citation.
+
+        Builds an exact lookup of (book_display_lower → {page_label}) from retrieved_docs,
+        then checks every citation in the response against that set. Citations that cannot
+        be verified — wrong book, wrong page, or book not retrieved at all — are replaced
+        in-place with [UNVERIFIED: ...] so they are never presented as confirmed sources.
         """
         if not retrieved_docs:
             return response
 
-        retrieved_books: set[str] = set()
+        # Build lookup: book_display_lower → {page_label_str, ...}
+        retrieved_pages: dict[str, set[str]] = {}
         for doc in retrieved_docs:
-            meta = classify_source((doc.get("metadata") or {}).get("source", ""))
-            if meta:
-                retrieved_books.add(meta.display.lower())
+            sm = classify_source((doc.get("metadata") or {}).get("source", ""))
+            if sm:
+                page = str((doc.get("metadata") or {}).get("page_label", "") or "")
+                retrieved_pages.setdefault(sm.display.lower(), set()).add(page)
 
-        # Find all Source: footer citations in the response.
-        claimed = re.findall(
-            r"\*\*Source:\*\*\s*([^\n*]+)",
-            response,
-            re.IGNORECASE,
-        )
+        def _claim_valid(claim: str) -> bool:
+            claim_l = claim.strip().lower()
+            matched_book = next((b for b in retrieved_pages if b in claim_l), None)
+            if not matched_book:
+                return False
+            claimed_pages = re.findall(r"\b(\d+)\b", claim_l)
+            if not claimed_pages:
+                return True  # book-level citation, no page demanded — accept
+            return any(p in retrieved_pages[matched_book] for p in claimed_pages)
 
-        invalid: list[str] = []
-        for claim in claimed:
-            claim_lower = claim.strip().lower()
-            if not any(book in claim_lower for book in retrieved_books):
-                invalid.append(claim.strip())
+        def _fix_bold(m: re.Match) -> str:
+            claim = m.group(1).strip()
+            if _claim_valid(claim):
+                return m.group(0)
+            return f"**Source:** [UNVERIFIED: {claim}]"
 
-        if invalid:
-            retrieved_list = ", ".join(sorted({
-                meta.display
-                for doc in retrieved_docs
-                if (meta := classify_source((doc.get("metadata") or {}).get("source", "")))
-            }))
-            note = (
-                "\n\n> **Retrieval note:** The following citation(s) could not be "
-                "matched to retrieved passages: " + "; ".join(invalid) +
-                ". Retrieved sources: " + (retrieved_list or "none") + "."
-            )
-            return response + note
+        def _fix_bracket(m: re.Match) -> str:
+            claim = m.group(1).strip()
+            if _claim_valid(claim):
+                return m.group(0)
+            return f"[UNVERIFIED: {claim}]"
 
-        return response
+        result = re.sub(r"\*\*Source:\*\*\s*([^\n*]+)", _fix_bold, response, flags=re.IGNORECASE)
+        result = re.sub(r"\[Source:\s*([^\]]+)\]", _fix_bracket, result, flags=re.IGNORECASE)
+        return result
 
     async def decide_retrieval_path(self, state: ChatState) -> dict:
         if state.get("file"):

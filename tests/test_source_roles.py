@@ -594,79 +594,94 @@ class TestPhase2Retrieval:
 
     @requires_service
     def test_scenario3_garifuna_ii_retrieved(self):
-        # Garífuna II p.105 has the Dügü→Gayunari / Chugú→Dabuyaba distinction.
-        # The guaranteed preferred-role inclusion in global_retrieval_process ensures
-        # Garífuna II content reaches the final context for CULTURAL_HISTORICAL queries.
-        # Verify via Source: citations in the chat response, which runs the full workflow.
-        # (Note: /retrieval_check_hybrid bypasses topup/boosting/guarantee.)
-        answer = _ask_chat("Explain Duguu, Chugu, Gayunari, and Dabuyaba.")
-        source_lines = re.findall(r"(?:\*\*Source:\*\*|\[Source:)\s*([^\n\]]+)", answer, re.I)
-        # At least one source citation should reference Garífuna II, Diccionario,
-        # or Serie I — the answer must be grounded in documents, not invented.
-        assert source_lines, (
-            f"No **Source:** citations in response — answer may be ungrounded.\n"
-            f"Response: {answer[:400]}"
+        # Libro Garífuna II, page 105 documents the specific ceremony→building mappings:
+        #   Dügü (ceremony) → Gayunari (its ceremonial house)
+        #   Chugú (ceremony) → Dabuyaba (its ceremonial house)
+        # This test verifies those specific pairings via a source-constrained query
+        # (path 2.6: 'Libro Garifuna II' triggers _source_constrained_hybrid_retrieve).
+        # Generic ceremony/building distinction is insufficient; specific names must appear.
+        answer = _ask_chat(
+            "According to Libro Garifuna II, what ceremonial buildings are associated "
+            "with the Duguu and Chugu ceremonies?"
         )
-        # Specifically, Garífuna II should contribute (p.105 or p.33) since it has
-        # the ceremony→building mapping. If it doesn't appear in citations, at least
-        # the ceremony vs building distinction must be present in the text.
-        has_gar_ii = any("garifuna ii" in s.lower() or "garífuna ii" in s.lower() for s in source_lines)
-        has_distinction = bool(re.search(
-            r"(?:cerem|ritual|ancestral|spiritual).*(?:house|build|espacio|lugar|center)"
-            r"|(?:house|build|espacio|lugar|center).*(?:cerem|ritual|ancestral)",
-            answer, re.I,
-        ))
-        assert has_gar_ii or has_distinction, (
-            f"Response neither cites Garífuna II nor explains ceremony/building distinction.\n"
-            f"Source lines: {source_lines}\nResponse: {answer[:500]}"
+        # Both ceremonial building names must be in the response
+        assert re.search(r"Gayunari", answer, re.I), (
+            f"Response does not mention Gayunari (Dügü’s ceremonial building).\n"
+            f"Response: {answer[:500]}"
+        )
+        assert re.search(r"Dabuyaba", answer, re.I), (
+            f"Response does not mention Dabuyaba (Chugú’s ceremonial building).\n"
+            f"Response: {answer[:500]}"
+        )
+        # Garífuna II must be cited (source-constrained retrieval should deliver it)
+        assert re.search(r"gar[íí]funa\s+ii", answer, re.I), (
+            f"Response does not cite Garífuna II.\nResponse: {answer[:400]}"
+        )
+        # Page 105 specifically — this is the documented source for these mappings
+        assert re.search(r"\b105\b", answer), (
+            f"Response does not cite page 105 of Garífuna II — specific source unverified.\n"
+            f"Response: {answer[:500]}"
         )
 
     # ── Scenario 4: multi-part evidence retrieval ────────────────────────────
 
     @requires_service
     def test_scenario4_vowels_and_vocab_retrieval(self):
-        # "Teach me the Garífuna vowels and give five documented examples."
-        # Must retrieve both pronunciation content (Serie I) AND vocabulary (Diccionario).
-        q = "Teach me the Garifuna vowels and give five documented vocabulary examples."
-        matches = _ask_retrieval(q, k=8)
-        sources = [m.get("metadata", {}).get("source", "").upper() for m in matches]
-        has_serie_i = any("SERIE I" in s for s in sources)
-        has_dict = any("DICCIONARIO" in s or "LEXICON" in s for s in sources)
-        assert has_serie_i, (
-            f"Missing Serie I (vowel content) in retrieval. Sources: "
-            f"{[s.split('/')[-1][:25] for s in sources]}"
+        # 'Teach me the Garífuna vowels and give five documented examples.'
+        # Verifies that global_retrieval_process (path 4b: multi-part decomposition)
+        # retrieves evidence for BOTH sub-queries and surfaces both topics in the response.
+        # Note: /retrieval_check_hybrid BYPASSES path 4b — this test must use _ask_chat.
+        answer = _ask_chat(
+            "Teach me the Garifuna vowels and give five documented vocabulary examples."
         )
-        assert has_dict, (
-            f"Missing Diccionario/Lexicon (vocabulary examples) in retrieval. Sources: "
-            f"{[s.split('/')[-1][:25] for s in sources]}"
+        # Topic 1: vowel content from Serie I must appear
+        has_vowel_content = bool(re.search(
+            r"\bvowel|\bvocal|\bpronunci|\ba,\s*e,\s*i", answer, re.I
+        ))
+        # Topic 2: vocabulary content from Diccionario/Lexicon must appear
+        has_vocab_content = bool(
+            re.search(r"\d+\.\s+\*\*[A-Za-záéíóúüñÁÉÍÓÚÜÑ]", answer) or
+            re.search(r"[Dd]iccionario|[Ll]exicon", answer)
+        )
+        assert has_vowel_content, (
+            f"Multi-part retrieval did not produce vowel content in response:\n{answer[:400]}"
+        )
+        assert has_vocab_content, (
+            f"Multi-part retrieval did not produce vocabulary content in response:\n{answer[:400]}"
+        )
+        # Serie I must be cited — it is the vowel source
+        assert re.search(r"[Ss]erie\s*I", answer), (
+            f"Serie I not cited — vowel evidence may not have been retrieved:\n{answer[:400]}"
         )
 
     @requires_service
     def test_scenario4_no_fabricated_vocabulary(self):
         # The LLM must not present vocabulary items with fabricated definitions.
-        # Acceptable: listing word forms without translations + acknowledging the gap.
-        # Not acceptable: "Word X means Y" where Y is not in retrieved context.
+        # A citation for the vowel section (Serie I) does NOT cover the vocabulary section.
+        # Vocabulary words paired with definitions must be backed by Diccionario/Lexicon.
         answer = _ask_chat(
             "Teach me the Garifuna vowels and give five documented vocabulary examples."
         )
-        # Fabrication marker: LLM says "X means Y" or "X — Y" in a list without citing a source,
-        # AND does NOT acknowledge inability to provide full definitions.
-        has_fabricated_definitions = bool(re.search(
-            r"\d+\.\s+\*\*\w[^*]+\*\*\s*[-–—]\s*\w",  # "1. **Word** - Definition"
+        # Detect "1. **Word** — Definition" items (vocabulary with inline definitions)
+        has_defined_vocab = bool(re.search(
+            r"\d+\.\s+\*\*\w[^*]+\*\*\s*[-–—]\s*\w",
             answer,
         ))
+        # Diccionario or Lexicon must be cited when vocabulary definitions are provided
+        has_diccionario_citation = bool(re.search(
+            r"[Dd]iccionario|[Ll]exicon", answer
+        ))
         acknowledges_limitation = bool(re.search(
-            r"not.*translat|no.*translat|not.*provid|not.*definit|context.*not|"
+            r"not.*translat|no.*translat|not.*provid|not.*definit|"
             r"without.*translat|unable.*translat|don.?t.*have.*translat",
             answer, re.I,
         ))
-        has_citation = bool(re.search(
-            r"\*\*[Ss]ource:|[Ss]erie\s*I|Diccionario|Lexicon", answer
-        ))
-        assert not has_fabricated_definitions or has_citation or acknowledges_limitation, (
-            f"Response presents defined vocabulary without citation or limitation acknowledgment:\n"
-            f"{answer[:600]}"
+        assert not has_defined_vocab or has_diccionario_citation or acknowledges_limitation, (
+            f"Response provides vocabulary definitions without Diccionario/Lexicon citation.\n"
+            f"A citation from Serie I does not verify vocabulary — Serie I is a grammar book.\n"
+            f"Response (first 600 chars):\n{answer[:600]}"
         )
+
 
     # ── Scenario 5: specific page verification ───────────────────────────────
 
