@@ -400,6 +400,17 @@ class TestLiveRetrieval:
         for p in pages:
             assert 1 <= p <= 200, f"Implausible page number: {p}"
 
+    @requires_service
+    def test_vowel_includes_u_umlaut(self):
+        # Libro Serie I p.4 explicitly documents six vowels: a, e, i, o, u, ü.
+        # The ü (guttural dental) must appear in the vowel explanation.
+        # Page 4 is retrieved at rank 1 for vowel queries — omission is a generation error.
+        answer = _ask_chat("What are the Garifuna vowels?")
+        assert re.search(r"[üÜ]|u[\s-]?umlaut|guttural|diéresis", answer, re.I), (
+            f"Response omits ü — Libro Serie I p.4 documents six vowels including ü:\n"
+            f"{answer[:400]}"
+        )
+
 
 # ─── UNIT + INTEGRATION TESTS: explicit page retrieval ───────────────────────
 
@@ -653,6 +664,11 @@ class TestPhase2Retrieval:
         assert re.search(r"[Ss]erie\s*I", answer), (
             f"Serie I not cited — vowel evidence may not have been retrieved:\n{answer[:400]}"
         )
+        # ü must appear — Libro Serie I p.4 lists six vowels including ü
+        assert re.search(r"[üÜ]|u[\s-]?umlaut|guttural", answer, re.I), (
+            f"Response omits ü — Serie I p.4 is retrieved at rank 1 with ü listed:\n"
+            f"{answer[:400]}"
+        )
 
     @requires_service
     def test_scenario4_no_fabricated_vocabulary(self):
@@ -682,6 +698,37 @@ class TestPhase2Retrieval:
             f"Response (first 600 chars):\n{answer[:600]}"
         )
 
+
+    @requires_service
+    def test_scenario4_vocabulary_five_sourced_or_states_unavailable(self):
+        # When asked for five translated vocabulary examples, the response must either:
+        # a) provide five word-meaning pairs backed by retrieved context, OR
+        # b) explicitly state that fewer than five with definitions are available.
+        # Words listed as 'not provided in the retrieved context' do not count.
+        answer = _ask_chat(
+            "Give me five documented Garifuna vocabulary words with their translations."
+        )
+        # Count items that have an actual definition (not 'not provided' or similar)
+        all_items = re.findall(
+            r"\d+\.\s+\*\*[^*]+\*\*\s*[-–—]\s*([^\n]+)",
+            answer,
+        )
+        sourced = [
+            d for d in all_items
+            if not re.search(
+                r"not provided|not available|no translation|context does not|not in.*context",
+                d, re.I,
+            )
+        ]
+        acknowledges_fewer = bool(re.search(
+            r"only\s+\d+|fewer than|could only|just \d+|\d+.*available|available.*\d+",
+            answer, re.I,
+        ))
+        assert len(sourced) >= 5 or acknowledges_fewer, (
+            f"Expected 5 sourced vocabulary pairs or explicit acknowledgment of fewer.\n"
+            f"Found {len(sourced)} sourced items (of {len(all_items)} listed).\n"
+            f"Response: {answer[:600]}"
+        )
 
     # ── Scenario 5: specific page verification ───────────────────────────────
 
@@ -751,3 +798,37 @@ class TestPhase2Retrieval:
         book_r = parse_book_request(q)
         assert page_r.matched, "Page request should match"
         assert book_r.matched, "Book request also matches; nodes.py uses page path first"
+
+    def test_validate_citations_exact_page_check(self):
+        # Unit test: _validate_citations must check exact (book, page) pairs,
+        # detect both **Source:** and [Source: ...] formats, and replace
+        # unverified citations in-place with [UNVERIFIED: ...].
+        from app.services.utils.RAG_pipeline.workflow.nodes import WorkflowNodes
+        inst = object.__new__(WorkflowNodes)  # bypass __init__; only testing the method
+
+        retrieved_docs = [{
+            "metadata": {
+                "source": "app/services/utils/RAG_pipeline/data/new_docs/LIBRO SERIE I.pdf",
+                "page_label": "21",
+            }
+        }]
+
+        # Correct book + correct page → unchanged
+        result = inst._validate_citations("**Source:** Libro Serie I — page 21", retrieved_docs)
+        assert "[UNVERIFIED" not in result, f"Valid citation was incorrectly marked: {result}"
+
+        # Correct book + wrong page → UNVERIFIED
+        result = inst._validate_citations("**Source:** Libro Serie I — page 99", retrieved_docs)
+        assert "[UNVERIFIED" in result, f"Wrong page not flagged: {result}"
+
+        # Wrong book entirely → UNVERIFIED
+        result = inst._validate_citations("**Source:** Libro Garífuna II — page 21", retrieved_docs)
+        assert "[UNVERIFIED" in result, f"Wrong book not flagged: {result}"
+
+        # [Source: ...] bracket format, wrong page → UNVERIFIED
+        result = inst._validate_citations("[Source: Libro Serie I — page 99]", retrieved_docs)
+        assert "[UNVERIFIED" in result, f"Bracket format not checked: {result}"
+
+        # [Source: ...] bracket format, correct page → unchanged
+        result = inst._validate_citations("[Source: Libro Serie I — page 21]", retrieved_docs)
+        assert "[UNVERIFIED" not in result, f"Valid bracket citation was incorrectly flagged: {result}"

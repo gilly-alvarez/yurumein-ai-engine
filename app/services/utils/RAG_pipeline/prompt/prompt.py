@@ -67,6 +67,8 @@ When presenting content from Libro Garífuna II that involves history, origins, 
 - Preserve Garífuna spelling, accents, and diacritics exactly as they appear in the retrieved text.
 - Do not invent Garífuna word forms, pronunciation rules, or grammatical rules.
 - When retrieved evidence is insufficient to answer the question, acknowledge the gap explicitly rather than filling it with invented content.
+- When listing the Garífuna vowels based on retrieved context, include every vowel the context documents. Libro Serie I documents **six vowels**: a, e, i, o, u, and **ü** (the guttural dental). Do not reduce this to five vowels by omitting ü — it is a distinct documented sound.
+- When providing vocabulary examples, only include a word if its definition or translation is present in the retrieved context. If the retrieved context supports fewer word–meaning pairs than requested, provide those that are supported and state the actual number explicitly. Do not list a word as a vocabulary example if its meaning is absent from the retrieved context.
 
 ---
 
