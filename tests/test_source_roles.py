@@ -242,6 +242,30 @@ class TestReverseLookup:
     def test_nonexistent_term_returns_empty(self):
         assert YurumeinLexicon().reverse_lookup("superconductor") == []
 
+    @requires_lexicon
+    def test_accented_initial_character(self):
+        # lower("Ibehabu") = "ibehabu"; the old prefix filter
+        # "lower(garifuna) LIKE i%" misses accented I because i-acute != i.
+        rows = YurumeinLexicon().reverse_lookup("Ibehabu")
+        assert len(rows) > 0, "Accented initial character lookup returned empty"
+        assert any(r["english"] == "Abundance" for r in rows)
+
+    @requires_lexicon
+    def test_second_variant_comma_separated(self):
+        # Weiyali is the 2nd form in Aruguti, Weiyali, Ko (Grandfather)
+        # and also in Weiriei, Weiyali (Old man).
+        # The old whole-field normalize comparison would miss both.
+        rows = YurumeinLexicon().reverse_lookup("Weiyali")
+        assert len(rows) >= 1, "Second comma-separated variant returned empty"
+        forms_per_row = [
+            [f.strip() for f in (r["garifuna"] or "").split(",")]
+            for r in rows
+        ]
+        assert all(
+            any(f.lower() == "weiyali" for f in forms)
+            for forms in forms_per_row
+        ), "Non-matching row leaked: " + str([r["garifuna"] for r in rows])
+
 
 # ─── INTEGRATION TESTS: live API ─────────────────────────────────────────────
 
