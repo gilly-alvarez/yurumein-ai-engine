@@ -106,8 +106,12 @@ _NO_MATCH = ParseResult(matched=False, term=None, language=None, pattern=None)
 
 
 def _clean_term(raw: str) -> Optional[str]:
-    """Strip surrounding whitespace and trailing sentence punctuation."""
-    term = _TERMINAL_PUNCT.sub("", raw.strip())
+    """Strip whitespace, surrounding quotes, and trailing sentence punctuation."""
+    term = raw.strip()
+    # Remove surrounding single or double quotes that the user typed
+    if len(term) >= 2 and term[0] in ("'", '"') and term[-1] == term[0]:
+        term = term[1:-1].strip()
+    term = _TERMINAL_PUNCT.sub("", term)
     return term if term else None
 
 
