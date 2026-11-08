@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from typing import Dict, Optional, Set
 
 from openai import OpenAI
@@ -35,6 +36,7 @@ class Translater:
         self.vector_store = VectorStoreManager()
         self.lexicon = YurumeinLexicon()
         self._cached_garifuna_words: Optional[Set[str]] = None
+        self._cache_loaded_at: Optional[datetime] = None
 
     def _load_garifuna_words(self) -> Set[str]:
         """Load all verified Garífuna word-forms from the lexicon for context grounding checks."""
@@ -54,11 +56,19 @@ class Translater:
         except Exception:
             return set()
 
+    _CACHE_TTL_SECONDS = 600  # 10 minutes
+
     @property
     def _garifuna_words(self) -> Set[str]:
-        if self._cached_garifuna_words is None:
+        now = datetime.utcnow()
+        expired = (
+            self._cache_loaded_at is None
+            or (now - self._cache_loaded_at).total_seconds() > self._CACHE_TTL_SECONDS
+        )
+        if expired:
             self._cached_garifuna_words = self._load_garifuna_words()
-        return self._cached_garifuna_words
+            self._cache_loaded_at = now
+        return self._cached_garifuna_words  # type: ignore[return-value]
 
     def _retrieve_context(self, text: str) -> str:
         """Keyword retrieval from the curated vector store. Returns empty string on miss or error."""

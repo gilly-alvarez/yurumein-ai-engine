@@ -10,3 +10,10 @@ env/
 .pytest_cache/
 .DS_Store
 *.log
+# Backup and snapshot files
+*.backup
+*.backup-*
+*.pre-*
+backups/
+app-before-*/
+app/services/translater/translater.py 
