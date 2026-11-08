@@ -171,6 +171,45 @@ class VectorStoreManager:
             print(f"Keyword search error: {e}")
             return []
 
+    def page_search(self, source_pattern: str, pages: tuple) -> list[dict]:
+        """
+        Return ALL chunks from specific pages of a source, ordered by page then
+        length DESC. Used for explicit book-and-page requests; no k limit.
+        """
+        if not pages:
+            return []
+        sql = """
+            SELECT e.document, e.cmetadata
+            FROM langchain_pg_embedding AS e
+            JOIN langchain_pg_collection AS c ON e.collection_id = c.uuid
+            WHERE c.name = :collection_name
+              AND e.cmetadata->>'source' ILIKE :source_pattern
+              AND (e.cmetadata->>'page_label')::int = ANY(:pages)
+            ORDER BY (e.cmetadata->>'page_label')::int,
+                     length(e.document) DESC
+        """
+        try:
+            with self._engine.connect() as conn:
+                rows = conn.execute(
+                    text(sql),
+                    {
+                        "collection_name": self.collection_name,
+                        "source_pattern": source_pattern,
+                        "pages": list(pages),
+                    },
+                ).mappings().all()
+            return [
+                {
+                    "page_content": row["document"] or "",
+                    "metadata": row["cmetadata"] or {},
+                }
+                for row in rows
+                if (row["document"] or "").strip()
+            ]
+        except Exception as e:
+            print(f"Page search error: {e}")
+            return []
+
     def delete_collection(self):
         """Clear all data in this collection."""
         self.vector_store.delete_collection()

@@ -11,7 +11,7 @@ from ..DB.session_manager import SessionManager
 from ..prompt.prompt import system_prompt, user_prompt
 from ..vectore_db.pgvector_db import VectorStoreManager
 from .state import ChatState
-from app.services.chatbot.lexical_parser import parse_lexical_request, parse_definition_request
+from app.services.chatbot.lexical_parser import parse_lexical_request, parse_definition_request, parse_page_request
 from app.services.chatbot.intent_router import Intent, detect_intent, preferred_roles_for
 from app.services.chatbot.source_classifier import classify_source, source_display_name
 from app.services.lexicon.lexicon import YurumeinLexicon
@@ -315,6 +315,30 @@ class Nodes:
             "</LEXICON_CONTEXT>"
         )
 
+    def _build_page_context(
+        self, display_name: str, pages: tuple, chunks: list[dict]
+    ) -> str:
+        parts = []
+        for index, chunk in enumerate(chunks, start=1):
+            metadata = chunk.get("metadata") or {}
+            page_label = metadata.get("page_label", "?")
+            parts.append(
+                f"[Source: {display_name}, Page {page_label} | Rank: {index} | Retrieval: page_lookup]\n"
+                f"{chunk.get('page_content', '')}"
+            )
+        return "\n\n".join(parts)
+
+    def _build_page_not_found_context(
+        self, display_name: str, pages: tuple
+    ) -> str:
+        pages_str = ", ".join(str(p) for p in pages)
+        return (
+            f"[Source: {display_name} | Retrieval: page_lookup]\n"
+            f"NOTE: The requested page(s) {pages_str} of {display_name} were not found "
+            f"in the indexed document collection. Those specific page numbers are not "
+            f"present. Inform the user accurately that those pages are not available."
+        )
+
     async def decide_retrieval_path(self, state: ChatState) -> dict:
         if state.get("file"):
             return {"next_node": "file_process"}
@@ -391,6 +415,25 @@ class Nodes:
                     ctx = self._build_definition_context(def_result.term, rows)
                     if ctx:
                         return {"context": ctx}
+
+            # 2.5. Explicit page request: deterministic metadata-filtered lookup.
+            page_result = parse_page_request(query)
+            if page_result.matched:
+                chunks = self.vector_store.page_search(
+                    page_result.source_pattern, page_result.pages
+                )
+                if chunks:
+                    return {
+                        "context": self._build_page_context(
+                            page_result.display_name, page_result.pages, chunks
+                        ),
+                        "retrieved_docs": chunks,
+                    }
+                return {
+                    "context": self._build_page_not_found_context(
+                        page_result.display_name, page_result.pages
+                    ),
+                }
 
             # 3. Detect intent and select preferred source roles.
             intent = detect_intent(query)

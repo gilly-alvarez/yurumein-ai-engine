@@ -365,3 +365,88 @@ class TestLiveRetrieval:
         pages = [int(m) for m in re.findall(r"page\s+(\d+)", answer, re.I)]
         for p in pages:
             assert 1 <= p <= 200, f"Implausible page number: {p}"
+
+
+# ─── UNIT + INTEGRATION TESTS: explicit page retrieval ───────────────────────
+
+class TestPageRetrieval:
+    # Regression tests for explicit book-and-page retrieval (Phase 2 fix).
+
+    # -- unit: parser -----------------------------------------------------------
+
+    def test_parse_page_request_serie_i_two_pages(self):
+        from app.services.chatbot.lexical_parser import parse_page_request
+        r = parse_page_request("Show me pages 21 and 24 of Libro Serie I")
+        assert r.matched
+        assert r.source_pattern == "%LIBRO SERIE I%"
+        assert r.display_name == "Libro Serie I"
+        assert 21 in r.pages
+        assert 24 in r.pages
+
+    def test_parse_page_request_garifuna_ii(self):
+        from app.services.chatbot.lexical_parser import parse_page_request
+        r = parse_page_request("What is on page 29 of Libro Garífuna II?")
+        assert r.matched
+        assert r.source_pattern == "%GARIFUNA II%"
+        assert 29 in r.pages
+
+    def test_parse_page_request_no_match_without_book(self):
+        from app.services.chatbot.lexical_parser import parse_page_request
+        r = parse_page_request("What is on page 21?")
+        assert not r.matched
+
+    def test_parse_page_request_ordinary_question_no_match(self):
+        from app.services.chatbot.lexical_parser import parse_page_request
+        for q in [
+            "How do Garifuna vowels work?",
+            "Teach me basic Garifuna numbers",
+            "What does wüwüñü mean?",
+            "Explain Garifuna sentence construction",
+        ]:
+            r = parse_page_request(q)
+            assert not r.matched, f"parse_page_request incorrectly matched: {q!r}"
+
+    # -- integration: live API --------------------------------------------------
+
+    @requires_service
+    def test_serie_i_pages_21_and_24_retrieved(self):
+        answer = _ask_chat("Show me what is on pages 21 and 24 of Libro Serie I")
+        # Pages 21 and 24 contain vocabulary (Bunidi, Biniwali, Funayumati, etc.).
+        # The response must not falsely claim these pages are unavailable.
+        assert not re.search(
+            r"not.*available|not.*present|not.*found|not.*index|do not have.*page",
+            answer, re.I
+        ), f"Response falsely claims page unavailable: {answer[:300]}"
+
+    @requires_service
+    def test_serie_i_page_8_retrieved(self):
+        answer = _ask_chat("What is on page 8 of Libro Serie I?")
+        assert not re.search(
+            r"not.*available|not.*present|not.*found|not.*index|do not have.*page",
+            answer, re.I
+        ), f"Response falsely claims page unavailable: {answer[:300]}"
+
+    @requires_service
+    def test_nonexistent_page_response(self):
+        answer = _ask_chat("What is on page 999 of Libro Serie I?")
+        assert re.search(
+            r"not.*available|not.*present|not.*found|not.*index|unavailable|"
+            r"does not exist|not in.*collection|those pages|page.*not",
+            answer, re.I
+        ), f"Expected not-found response for page 999, got: {answer[:300]}"
+
+    @requires_service
+    def test_ordinary_question_uses_existing_pipeline(self):
+        # An ordinary grammar question (no book name + page number) must use
+        # the standard hybrid retrieval path, not page-filtered lookup.
+        from app.services.chatbot.lexical_parser import parse_page_request
+        ordinary_queries = [
+            "How do Garifuna vowels work?",
+            "Explain Garifuna sentence construction",
+            "Teach me basic Garifuna numbers",
+        ]
+        for q in ordinary_queries:
+            r = parse_page_request(q)
+            assert not r.matched, f"Ordinary question triggered page path: {q!r}"
+        matches = _ask_retrieval("How do Garifuna vowels work?", k=5)
+        assert len(matches) > 0, "No retrieval results for ordinary question"

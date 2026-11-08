@@ -167,3 +167,60 @@ def parse_definition_request(text: str) -> ParseResult:
             )
 
     return _NO_MATCH
+
+
+@dataclass
+class PageRequest:
+    matched: bool
+    source_pattern: str | None
+    display_name: str | None
+    pages: tuple
+
+
+# Book aliases → (source ILIKE pattern, display name).
+# Aliases are lowercase; matching uses text.lower().
+_BOOK_MAP = [
+    (["libro serie i", "serie i"], "%LIBRO SERIE I%", "Libro Serie I"),
+    (
+        ["libro garifuna ii", "libro garífuna ii", "garífuna ii", "garifuna ii"],
+        "%GARIFUNA II%",
+        "Libro Garífuna II",
+    ),
+]
+
+_PAGE_TRIGGER_RE = re.compile(
+    r"\b(?:page|pages|p[áa]gina|p[áa]ginas)\b", re.IGNORECASE
+)
+_PAGE_NUMBER_RE = re.compile(r"\d+")
+
+
+def parse_page_request(text: str) -> PageRequest:
+    """
+    Parse a request naming a recognized book plus explicit page number(s).
+
+    Triggers only when BOTH a recognized book alias AND a page-trigger word
+    plus at least one integer are present. Returns matched=True with
+    source_pattern, display_name, and a pages tuple of ints.
+    """
+    if not text or not text.strip():
+        return PageRequest(matched=False, source_pattern=None, display_name=None, pages=())
+
+    text_lower = text.lower()
+
+    if not _PAGE_TRIGGER_RE.search(text):
+        return PageRequest(matched=False, source_pattern=None, display_name=None, pages=())
+
+    page_numbers = _PAGE_NUMBER_RE.findall(text)
+    if not page_numbers:
+        return PageRequest(matched=False, source_pattern=None, display_name=None, pages=())
+
+    for aliases, source_pattern, display_name in _BOOK_MAP:
+        if any(alias in text_lower for alias in aliases):
+            return PageRequest(
+                matched=True,
+                source_pattern=source_pattern,
+                display_name=display_name,
+                pages=tuple(int(p) for p in page_numbers),
+            )
+
+    return PageRequest(matched=False, source_pattern=None, display_name=None, pages=())
