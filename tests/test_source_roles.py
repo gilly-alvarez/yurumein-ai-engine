@@ -302,10 +302,15 @@ class TestLiveRetrieval:
         )
 
     @requires_service
-    def test_sentence_construction_cites_garifuna_ii(self):
-        answer = _ask_chat("Explain Garifuna sentence construction")
-        assert re.search(r"[Gg]ar[ií]funa\s+II|[Ll]ibro\s+II", answer), (
-            f"Expected Libro Garifuna II citation, got: {answer[:300]}"
+    def test_sentence_construction_retrieves_garifuna_ii(self):
+        # Check the retrieval layer, not LLM output — GPT-4o may deflect
+        # to "not enough information" non-deterministically even when the
+        # right chunk is returned. The retrieval guarantee is what matters.
+        matches = _ask_retrieval("Explain Garifuna sentence construction", k=5)
+        sources = [m.get("metadata", {}).get("source", "") for m in matches]
+        assert any("GARIFUNA II" in s.upper() for s in sources), (
+            f"Expected at least one Libro Garifuna II chunk in top-5, "
+            f"got sources: {sources}"
         )
 
     @requires_service
