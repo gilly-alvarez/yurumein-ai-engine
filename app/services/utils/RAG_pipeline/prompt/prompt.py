@@ -31,14 +31,22 @@ When more than one source is relevant, cite all of them.
 
 ---
 
-### Citation Format
+### Evidence IDs and Citation Format
 
-When a retrieved chunk has a source label, cite it at the end of the relevant paragraph:
+Each retrieved chunk is prefixed with an evidence ID of the form `[EID-N:BOOK:pPAGE]`.
+Use these IDs to track which chunk supports which claim.
+
+When citing retrieved content, place the citation at the end of the relevant paragraph:
 
   **Source:** Libro Serie I — page 21
   **Source:** Libro Garífuna II — page 30
 
-Use the page number from the source label exactly. Never fabricate or estimate a page number. If no page is available, cite the book without a page number.
+Rules:
+- Use the book name and page number exactly as they appear in the `[Source: ...]` label of the retrieved chunk — not from the user's question.
+- Never fabricate or estimate a page number.
+- If no page is available, cite the book name without a page number.
+- If the user asks about Book A but the only supporting chunk comes from Book B, name Book B in your answer (e.g., "this detail is documented in Libro Serie I, not Libro Garífuna II").
+- Do not cite a book that is not represented in the retrieved chunks.
 
 ---
 

@@ -484,3 +484,255 @@ class TestPageRetrieval:
             assert not r.matched, f"Ordinary question triggered page path: {q!r}"
         matches = _ask_retrieval("How do Garifuna vowels work?", k=5)
         assert len(matches) > 0, "No retrieval results for ordinary question"
+
+
+# ─── PHASE 2 REGRESSION TESTS ────────────────────────────────────────────────
+
+class TestPhase2Retrieval:
+    """
+    Regression suite for Phase 2 fixes: source-constrained retrieval,
+    multi-part evidence, and citation integrity.
+    """
+
+    # ── Scenario 1: explicit pages (already covered by TestPageRetrieval; ──
+    # ──             repeat here as a Phase-2 named regression) ──────────────
+
+    @requires_service
+    def test_scenario1_pages_21_and_24(self):
+        # "Using Libro Serie I, show five vocabulary words from pages 21 and 24."
+        # This query hits path 2.5 (parse_page_request matches) in global_retrieval_process.
+        # We verify via the chat response, which reflects the actual workflow path.
+        answer = _ask_chat(
+            "Using Libro Serie I, show five vocabulary words from pages 21 and 24."
+        )
+        # Must NOT falsely say the pages are unavailable
+        assert not re.search(
+            r"not.*available|not.*found|not.*index|do not have.*page",
+            answer, re.I,
+        ), f"False unavailable claim: {answer[:300]}"
+        # Must cite Serie I
+        assert re.search(r"[Ss]erie\s*I", answer), (
+            f"Expected Serie I citation: {answer[:300]}"
+        )
+        # Must reference pages 21 or 24 somewhere in the response
+        assert re.search(r"\b(21|24)\b", answer), (
+            f"Expected page 21 or 24 in response: {answer[:400]}"
+        )
+
+    # ── Scenario 2: source-constrained retrieval ─────────────────────────────
+
+    @requires_service
+    def test_scenario2_garifuna_ii_duguu_retrieval_constrained(self):
+        # "According to Libro Garífuna II, what is Dügü?"
+        # Path 2.6 (parse_book_request) restricts retrieval to Garífuna II in
+        # global_retrieval_process. Verify via the Source: citations in the response —
+        # the chat path runs the full workflow including source-constrained retrieval.
+        # Note: /retrieval_check_hybrid bypasses path 2.6 and cannot test this.
+        answer = _ask_chat("According to Libro Garifuna II, what is Duguu?")
+        # Response must cite Garífuna II (not exclusively other sources)
+        assert re.search(r"gar[ií]funa\s+ii", answer, re.I), (
+            f"Expected Garífuna II attribution in response: {answer[:400]}"
+        )
+        # Must NOT attribute a Garífuna-II answer to only Diccionario or Serie I
+        source_lines = re.findall(r"\*\*Source:\*\*\s*([^\n]+)", answer)
+        if source_lines:
+            all_non_garifuna_ii = all(
+                "garifuna ii" not in s.lower() and "garífuna ii" not in s.lower()
+                for s in source_lines
+            )
+            assert not all_non_garifuna_ii, (
+                f"All Source: citations are from other books; Garífuna II missing.\n"
+                f"Source lines: {source_lines}\nResponse: {answer[:400]}"
+            )
+
+    @requires_service
+    def test_scenario2_garifuna_ii_duguu_no_false_disclaimer(self):
+        # With source-constrained retrieval, the LLM should not falsely say
+        # "Libro Garífuna II contains no information about Dügü."
+        # Garífuna II p.5 and p.105 do mention Dügü / Dügü ceremonies.
+        answer = _ask_chat(
+            "According to Libro Garifuna II, what is Duguu?"
+        )
+        assert not re.search(
+            r"(?:garífuna\s+ii|garifuna\s+ii).*(?:do not|does not|no information|not contain|not found|not available)",
+            answer, re.I,
+        ), (
+            f"LLM falsely claimed Libro Garífuna II has no Dügü info: {answer[:400]}"
+        )
+        # Must cite Garífuna II
+        assert re.search(r"gar[ií]funa\s+ii", answer, re.I), (
+            f"Expected Garífuna II attribution: {answer[:300]}"
+        )
+
+    # ── Scenario 3: ceremony vs ceremonial building ──────────────────────────
+
+    @requires_service
+    def test_scenario3_duguu_is_ceremony_not_building(self):
+        # "Explain Dügü, Chugú, Gayunari, and Dabuyaba."
+        # Dügü and Chugú are CEREMONIES.
+        # Gayunari and Dabuyaba are the CEREMONIAL BUILDINGS/SPACES.
+        # The LLM must NOT define Dügü or Chugú primarily as "a house" or "a building."
+        answer = _ask_chat("Explain Duguu, Chugu, Gayunari, and Dabuyaba.")
+        sentences = re.split(r"(?<=[.!?])\s+", answer)
+        for sentence in sentences:
+            names_duguu_or_chugu = bool(
+                re.search(r"\b[Dd][üu]g[üu][üu]?\b|\b[Cc]hugu\b|\b[Cc]hug[uú]\b", sentence)
+            )
+            calls_it_house = bool(
+                re.search(
+                    r"\b(?:a\s+house|a\s+building|a\s+structure|tipo\s+de\s+casa|casa\s+cerem)",
+                    sentence, re.I,
+                )
+            )
+            has_ceremony_context = bool(
+                re.search(r"\bcerem|ritual|ancestral|spiritual|religious", sentence, re.I)
+            )
+            assert not (names_duguu_or_chugu and calls_it_house and not has_ceremony_context), (
+                f"LLM defined a ceremony (Dügü/Chugú) as a building without ceremony "
+                f"context.\nOffending sentence: {sentence!r}\nFull: {answer[:400]}"
+            )
+
+    @requires_service
+    def test_scenario3_garifuna_ii_retrieved(self):
+        # Garífuna II p.105 has the Dügü→Gayunari / Chugú→Dabuyaba distinction.
+        # The guaranteed preferred-role inclusion in global_retrieval_process ensures
+        # Garífuna II content reaches the final context for CULTURAL_HISTORICAL queries.
+        # Verify via Source: citations in the chat response, which runs the full workflow.
+        # (Note: /retrieval_check_hybrid bypasses topup/boosting/guarantee.)
+        answer = _ask_chat("Explain Duguu, Chugu, Gayunari, and Dabuyaba.")
+        source_lines = re.findall(r"(?:\*\*Source:\*\*|\[Source:)\s*([^\n\]]+)", answer, re.I)
+        # At least one source citation should reference Garífuna II, Diccionario,
+        # or Serie I — the answer must be grounded in documents, not invented.
+        assert source_lines, (
+            f"No **Source:** citations in response — answer may be ungrounded.\n"
+            f"Response: {answer[:400]}"
+        )
+        # Specifically, Garífuna II should contribute (p.105 or p.33) since it has
+        # the ceremony→building mapping. If it doesn't appear in citations, at least
+        # the ceremony vs building distinction must be present in the text.
+        has_gar_ii = any("garifuna ii" in s.lower() or "garífuna ii" in s.lower() for s in source_lines)
+        has_distinction = bool(re.search(
+            r"(?:cerem|ritual|ancestral|spiritual).*(?:house|build|espacio|lugar|center)"
+            r"|(?:house|build|espacio|lugar|center).*(?:cerem|ritual|ancestral)",
+            answer, re.I,
+        ))
+        assert has_gar_ii or has_distinction, (
+            f"Response neither cites Garífuna II nor explains ceremony/building distinction.\n"
+            f"Source lines: {source_lines}\nResponse: {answer[:500]}"
+        )
+
+    # ── Scenario 4: multi-part evidence retrieval ────────────────────────────
+
+    @requires_service
+    def test_scenario4_vowels_and_vocab_retrieval(self):
+        # "Teach me the Garífuna vowels and give five documented examples."
+        # Must retrieve both pronunciation content (Serie I) AND vocabulary (Diccionario).
+        q = "Teach me the Garifuna vowels and give five documented vocabulary examples."
+        matches = _ask_retrieval(q, k=8)
+        sources = [m.get("metadata", {}).get("source", "").upper() for m in matches]
+        has_serie_i = any("SERIE I" in s for s in sources)
+        has_dict = any("DICCIONARIO" in s or "LEXICON" in s for s in sources)
+        assert has_serie_i, (
+            f"Missing Serie I (vowel content) in retrieval. Sources: "
+            f"{[s.split('/')[-1][:25] for s in sources]}"
+        )
+        assert has_dict, (
+            f"Missing Diccionario/Lexicon (vocabulary examples) in retrieval. Sources: "
+            f"{[s.split('/')[-1][:25] for s in sources]}"
+        )
+
+    @requires_service
+    def test_scenario4_no_fabricated_vocabulary(self):
+        # The LLM must not present vocabulary items with fabricated definitions.
+        # Acceptable: listing word forms without translations + acknowledging the gap.
+        # Not acceptable: "Word X means Y" where Y is not in retrieved context.
+        answer = _ask_chat(
+            "Teach me the Garifuna vowels and give five documented vocabulary examples."
+        )
+        # Fabrication marker: LLM says "X means Y" or "X — Y" in a list without citing a source,
+        # AND does NOT acknowledge inability to provide full definitions.
+        has_fabricated_definitions = bool(re.search(
+            r"\d+\.\s+\*\*\w[^*]+\*\*\s*[-–—]\s*\w",  # "1. **Word** - Definition"
+            answer,
+        ))
+        acknowledges_limitation = bool(re.search(
+            r"not.*translat|no.*translat|not.*provid|not.*definit|context.*not|"
+            r"without.*translat|unable.*translat|don.?t.*have.*translat",
+            answer, re.I,
+        ))
+        has_citation = bool(re.search(
+            r"\*\*[Ss]ource:|[Ss]erie\s*I|Diccionario|Lexicon", answer
+        ))
+        assert not has_fabricated_definitions or has_citation or acknowledges_limitation, (
+            f"Response presents defined vocabulary without citation or limitation acknowledgment:\n"
+            f"{answer[:600]}"
+        )
+
+    # ── Scenario 5: specific page verification ───────────────────────────────
+
+    @requires_service
+    def test_scenario5_page_29_garifuna_ii(self):
+        # "Verify Chülüguaü badari on page 29 of Libro Garífuna II."
+        # Already covered by TestLiveRetrieval::test_chuluguau_badari_retrievable
+        # but repeated here with the explicit page form.
+        answer = _ask_chat(
+            "Verify the sentence on page 29 of Libro Garifuna II that starts with Chulugua badari."
+        )
+        assert not re.search(
+            r"not.*available|not.*found|not.*index|do not have.*page",
+            answer, re.I,
+        ), f"Page 29 falsely reported unavailable: {answer[:300]}"
+        assert re.search(r"[Gg]ar[ií]funa\s+II|page\s+29", answer), (
+            f"Expected page 29 / Garífuna II reference: {answer[:300]}"
+        )
+
+    # ── Scenario 6: nonexistent page → precise unavailable response ──────────
+
+    @requires_service
+    def test_scenario6_nonexistent_page_precise_response(self):
+        # Already tested in TestPageRetrieval but repeated here for Phase 3 naming.
+        answer = _ask_chat("What is on page 999 of Libro Serie I?")
+        assert re.search(
+            r"not.*available|not.*present|not.*found|not.*index|unavailable|"
+            r"does not exist|not in.*collection|those pages|page.*not",
+            answer, re.I,
+        ), f"Expected not-found response for page 999, got: {answer[:300]}"
+        # Must NOT fabricate a citation for a nonexistent page.
+        assert not re.search(r"\*\*Source:.*page\s+999", answer, re.I), (
+            f"Fabricated citation for nonexistent page: {answer[:300]}"
+        )
+
+    # ── Unit: parse_book_request ─────────────────────────────────────────────
+
+    def test_parse_book_request_garifuna_ii(self):
+        from app.services.chatbot.lexical_parser import parse_book_request
+        r = parse_book_request("According to Libro Garifuna II, what is Duguu?")
+        assert r.matched
+        assert r.source_pattern == "%GARIFUNA II%"
+        assert r.display_name == "Libro Garífuna II"
+
+    def test_parse_book_request_serie_i(self):
+        from app.services.chatbot.lexical_parser import parse_book_request
+        r = parse_book_request("What does Libro Serie I say about vowels?")
+        assert r.matched
+        assert r.source_pattern == "%LIBRO SERIE I%"
+
+    def test_parse_book_request_no_match_without_book(self):
+        from app.services.chatbot.lexical_parser import parse_book_request
+        r = parse_book_request("Explain Garifuna vowels")
+        assert not r.matched
+
+    def test_parse_book_request_no_match_ambiguous_two_books(self):
+        from app.services.chatbot.lexical_parser import parse_book_request
+        r = parse_book_request("Compare Libro Serie I with Libro Garifuna II")
+        assert not r.matched, "Two-book query should not trigger source constraint"
+
+    def test_parse_book_request_defers_to_page_request(self):
+        # When pages are specified, parse_page_request handles it; parse_book_request
+        # still returns matched (nodes.py uses page_result first).
+        from app.services.chatbot.lexical_parser import parse_book_request, parse_page_request
+        q = "Show me page 21 of Libro Serie I"
+        page_r = parse_page_request(q)
+        book_r = parse_book_request(q)
+        assert page_r.matched, "Page request should match"
+        assert book_r.matched, "Book request also matches; nodes.py uses page path first"
