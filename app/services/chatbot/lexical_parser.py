@@ -41,6 +41,14 @@ _TRANSLATE_PATTERNS: list[tuple[re.Pattern, str, str]] = [
     ),
     (
         re.compile(
+            r'how\s+do\s+[iI]\s+say\s+(.+?)\s+in\s+gar[ií]funa\b',
+            re.IGNORECASE,
+        ),
+        "english",
+        "how_do_i_say",
+    ),
+    (
+        re.compile(
             r'translate\s+(.+?)\s+to\s+gar[ií]funa\b',
             re.IGNORECASE,
         ),

@@ -299,7 +299,7 @@ class Nodes:
         forms_text = "\n".join(f"- {f}" for f in forms)
         return (
             "<LEXICON_CONTEXT>\n"
-            f"Source: yurumein_lexicon\n"
+            f"Source: Yurumein Lexicon\n"
             f"Query term: {term}\n"
             f"Source language: {language.capitalize()}\n"
             f"Documented Garífuna forms:\n{forms_text}\n"
@@ -321,7 +321,7 @@ class Nodes:
         forms_text = "\n".join(f"- {p}" for p in parts)
         return (
             "<LEXICON_CONTEXT>\n"
-            f"Source: yurumein_lexicon\n"
+            f"Source: Yurumein Lexicon\n"
             f"Query: {term}\n"
             f"Documented entries:\n{forms_text}\n"
             "</LEXICON_CONTEXT>"
@@ -540,13 +540,15 @@ class Nodes:
                 return {"context": "No query provided"}
 
             # 1. Translation request: exact pattern → lexicon, skip RAG.
+            # retrieved_docs is explicitly cleared so stale docs from a prior turn
+            # do not cause _validate_citations to tag the lexicon citation as UNVERIFIED.
             parse_result = parse_lexical_request(query)
             if parse_result.matched:
                 rows = YurumeinLexicon().lookup(parse_result.term, parse_result.language)
                 if rows:
                     ctx = self._build_lexicon_context(parse_result.term, parse_result.language, rows)
                     if ctx:
-                        return {"context": ctx}
+                        return {"context": ctx, "retrieved_docs": []}
 
             # 2. Definition request: attempt reverse lexicon lookup first.
             def_result = parse_definition_request(query)
@@ -555,7 +557,7 @@ class Nodes:
                 if rows:
                     ctx = self._build_definition_context(def_result.term, rows)
                     if ctx:
-                        return {"context": ctx}
+                        return {"context": ctx, "retrieved_docs": []}
 
             # 2.5. Explicit page request: deterministic metadata-filtered lookup.
             page_result = parse_page_request(query)
