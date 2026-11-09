@@ -124,6 +124,37 @@ class Nodes:
 
         return ""
 
+    # Signals that a query is a contextual follow-up and needs topic enrichment.
+    _FOLLOWUP_SIGNALS = re.compile(
+        r"\b(they|them|their|theirs|it\b|its\b|this|that|these|those|he|she|him|her"
+        r"|tell\s+me\s+more|more\s+about|what\s+happened|and\s+(?:what|where|when|how|why))\b",
+        re.IGNORECASE,
+    )
+
+    def _contextualize_query(self, query: str, messages: list[dict]) -> str:
+        """
+        Prepend the opening sentence of the last assistant reply to short or
+        pronoun-bearing follow-up queries so retrieval surfaces documents relevant
+        to the ongoing topic rather than the decontextualised phrase alone.
+        """
+        if not messages:
+            return query
+        # Only enrich short queries or those with referential language.
+        if len(query.split()) > 12 and not self._FOLLOWUP_SIGNALS.search(query):
+            return query
+        last_ai = None
+        for msg in reversed(messages):
+            if msg.get("role") in ("assistant", "ai"):
+                last_ai = (msg.get("content") or "").strip()
+                break
+        if not last_ai:
+            return query
+        first_sentence = re.split(r"(?<=[.!?])\s+", last_ai)[0].strip()
+        # Skip prefixes that are too short or are markdown/citation artefacts.
+        if len(first_sentence) < 20 or first_sentence.startswith(("**", "[", "Source:")):
+            return query
+        return f"{first_sentence[:120]} {query}"
+
     def _keyword_overlap_score(self, query: str, text: str) -> float:
         query_terms = {
             term for term in re.findall(r"\b\w+\b", query.lower()) if len(term) > 2
@@ -618,6 +649,12 @@ class Nodes:
             if not query:
                 return {"context": "No query provided"}
 
+            # Build a context-enriched retrieval query for follow-up turns.
+            # `query` is preserved for intent routing and all parsers; only
+            # the main hybrid search and top-up use the enriched form so
+            # specialised paths (lexical, page, book) are unaffected.
+            retrieval_query = self._contextualize_query(query, messages)
+
             # Track lexicon-miss state for downstream LEXICON_NOTE injection.
             _lexicon_miss_term: str | None = None
             _lexicon_miss_language: str | None = None
@@ -733,7 +770,7 @@ class Nodes:
             preferred = preferred_roles_for(intent)
 
             # 4. Broad hybrid retrieval.
-            pool = self._hybrid_retrieve(query=query, top_k=10)
+            pool = self._hybrid_retrieve(query=retrieval_query, top_k=10)
             if not pool:
                 return {"context": "No relevant documents found"}
 
@@ -787,7 +824,7 @@ class Nodes:
             #    This ensures content from the right book reaches the pool
             #    even when it doesn't rank in the global top-10.
             if preferred:
-                pool = self._topup_from_preferred_source(query, pool, preferred)
+                pool = self._topup_from_preferred_source(retrieval_query, pool, preferred)
 
             # 6. Filter low-information chunks.
             filtered = self._filter_low_info(pool)
