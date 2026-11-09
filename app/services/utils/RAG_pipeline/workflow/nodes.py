@@ -34,6 +34,60 @@ _ROLE_TO_SOURCE_PATTERN: dict[str, str] = {
     "DICTIONARY":                             "%DICCIONARIO GARIFUNA%",
 }
 
+# Bilingual retrieval expansion for lexicon misses.
+# When the lexical parser extracts a term that returns no lexicon rows, these
+# expansions run as supplementary RAG queries to surface the documented equivalent.
+#
+# SOURCE NOTES (must be preserved by any future editor):
+#   "hello" / "greetings" →  "Saludos Mábugaü Mábuigaü"
+#       Diccionario Garífuna p.174: "Saludos. Sus. com.  Mábugaü, Mábuigaü"
+#       "Saludos" means greetings/salutations (a noun), not a conversational "hello."
+#       The mapping surfaces the documented form; the LLM must note the distinction.
+#       FLAG: Whether Mábugaü functions as a standalone greeting requires
+#       native-speaker confirmation.
+#
+# NATIVE-SPEAKER REVIEW REQUIRED before any new entry is added.
+_BILINGUAL_RETRIEVAL_EXPANSIONS: dict[str, str] = {
+    "hello":     "Saludos Mábugaü Mábuigaü",
+    "greetings": "Saludos Mábugaü Mábuigaü",
+    "greeting":  "Saludos Mábugaü Mábuigaü",
+    "hi":        "Saludos Mábugaü Mábuigaü",
+}
+
+# Contextual query expansions for non-lexical-parser phrases.
+# Applied in the RAG path when the user query matches the pattern.
+# Each entry: (compiled regex, supplementary retrieval query, source note)
+#
+# SOURCE NOTES:
+#   introduce myself → "niribei Ká biri nombre"
+#       Garífuna II p.108: "Ká biri?" = "¿Cuál es tú nombre?" (What is your name?)
+#                          "Le niribei: Juan Martínez" = "Mi nombre es Juan Martínez"
+#       This is a NAME-EXCHANGE Q&A used in everyday conversation —
+#       NOT a formal self-introduction. The LLM must present it accurately.
+#
+#   Dügü / Chugú ceremony → "Gayunari Dabuyaba"
+#       Root cause: Libro Serie I p.128 describes Dügü and Chugú together ("Dügü y/o Chugú")
+#       and mentions "templo Dabuyaba" without distinguishing which ceremony uses which house.
+#       This misleads the LLM into attributing Dabuyaba to Dügü.
+#       Fix: supplement the pool with "Gayunari Dabuyaba" to surface:
+#         - Diccionario p.43: "Casa en donde se realiza ceremonia ancestral. Dügÿ, Gayunari"
+#                              "Casa en donde se realiza ceremonia ancestral. Chugu, Dabuyaba"
+#         - Garífuna II p.105: same pairing
+#       With these in context the LLM receives the definitive ceremony/building distinction.
+#       SOURCE: Diccionario Garífuna p.43 and Libro Garífuna II p.105
+_CONTEXTUAL_QUERY_EXPANSIONS: list[tuple] = [
+    (
+        re.compile(r'\bintroduce\s+(?:myself|yourself)\b|\bhow\s+(?:do\s+I|to)\s+(?:say|tell)\s+(?:someone\s+)?my\s+name\b', re.IGNORECASE),
+        "niribei Ká biri nombre",
+        "Garífuna II p.108: name-exchange Q&A",
+    ),
+    (
+        re.compile(r'\b[Dd][üu][gG][üu]\b|\b[Cc]hug[uú]\b|\bGayunari\b|\bDabuyaba\b', re.IGNORECASE),
+        "Gayunari Dabuyaba",
+        "Diccionario p.43 / Garífuna II p.105: Dügü→Gayunari, Chugú→Dabuyaba",
+    ),
+]
+
 
 class Nodes:
     def __init__(self):
@@ -292,6 +346,24 @@ class Nodes:
             )
         return "\n\n".join(parts)
 
+    def _build_lexicon_miss_context(self, term: str, language: str) -> str:
+        """Inject a deterministic note when the lexicon was searched but returned nothing.
+
+        This signals the LLM that it must not substitute a general-knowledge phrase.
+        The note is prepended to whatever RAG context follows.
+        """
+        return (
+            "<LEXICON_NOTE>\n"
+            f"The term '{term}' ({language}) was searched in the verified Garífuna lexicon "
+            f"(yurumein_lexicon) but no entry was found. "
+            f"If the retrieved documents below contain a documented Garífuna equivalent, "
+            f"cite that source and note any distinction between the documented meaning and "
+            f"the user's exact term (e.g., 'greetings/salutations' vs. a conversational greeting). "
+            f"Do not supply a translation from general knowledge or community expressions — "
+            f"these are not verified by the approved sources.\n"
+            "</LEXICON_NOTE>"
+        )
+
     def _build_lexicon_context(self, term: str, language: str, rows: list[dict]) -> str:
         forms = list(dict.fromkeys(r["garifuna"] for r in rows if r.get("garifuna")))
         if not forms:
@@ -299,7 +371,7 @@ class Nodes:
         forms_text = "\n".join(f"- {f}" for f in forms)
         return (
             "<LEXICON_CONTEXT>\n"
-            f"Source: yurumein_lexicon\n"
+            f"Source: Yurumein Lexicon\n"
             f"Query term: {term}\n"
             f"Source language: {language.capitalize()}\n"
             f"Documented Garífuna forms:\n{forms_text}\n"
@@ -321,7 +393,7 @@ class Nodes:
         forms_text = "\n".join(f"- {p}" for p in parts)
         return (
             "<LEXICON_CONTEXT>\n"
-            f"Source: yurumein_lexicon\n"
+            f"Source: Yurumein Lexicon\n"
             f"Query: {term}\n"
             f"Documented entries:\n{forms_text}\n"
             "</LEXICON_CONTEXT>"
@@ -539,14 +611,28 @@ class Nodes:
             if not query:
                 return {"context": "No query provided"}
 
+            # Track lexicon-miss state for downstream LEXICON_NOTE injection.
+            _lexicon_miss_term: str | None = None
+            _lexicon_miss_language: str | None = None
+            _extra_expansion_queries: list[str] = []
+
             # 1. Translation request: exact pattern → lexicon, skip RAG.
+            # retrieved_docs is explicitly cleared so stale docs from a prior turn
+            # do not cause _validate_citations to tag the lexicon citation as UNVERIFIED.
             parse_result = parse_lexical_request(query)
             if parse_result.matched:
                 rows = YurumeinLexicon().lookup(parse_result.term, parse_result.language)
                 if rows:
                     ctx = self._build_lexicon_context(parse_result.term, parse_result.language, rows)
                     if ctx:
-                        return {"context": ctx}
+                        return {"context": ctx, "retrieved_docs": []}
+                else:
+                    # Lexicon miss: record for LEXICON_NOTE and check bilingual expansion.
+                    _lexicon_miss_term = parse_result.term
+                    _lexicon_miss_language = parse_result.language
+                    expansion = _BILINGUAL_RETRIEVAL_EXPANSIONS.get(parse_result.term.strip().lower())
+                    if expansion:
+                        _extra_expansion_queries.append(expansion)
 
             # 2. Definition request: attempt reverse lexicon lookup first.
             def_result = parse_definition_request(query)
@@ -555,7 +641,7 @@ class Nodes:
                 if rows:
                     ctx = self._build_definition_context(def_result.term, rows)
                     if ctx:
-                        return {"context": ctx}
+                        return {"context": ctx, "retrieved_docs": []}
 
             # 2.5. Explicit page request: deterministic metadata-filtered lookup.
             page_result = parse_page_request(query)
@@ -599,6 +685,15 @@ class Nodes:
                     }
                 # No results from the named source → fall through to general retrieval.
 
+            # 2.7. Contextual query expansion: for specific phrase patterns whose
+            # natural-language form does not match the indexed vocabulary, supplement
+            # the pool with a targeted query that surfaces the documented content.
+            # Expansions are source-verified (see _CONTEXTUAL_QUERY_EXPANSIONS).
+            for _pattern, _exp_q, _note in _CONTEXTUAL_QUERY_EXPANSIONS:
+                if _pattern.search(query):
+                    _extra_expansion_queries.append(_exp_q)
+                    break  # one expansion per query is sufficient
+
             # 3. Detect intent and select preferred source roles.
             intent = detect_intent(query)
             preferred = preferred_roles_for(intent)
@@ -607,6 +702,38 @@ class Nodes:
             pool = self._hybrid_retrieve(query=query, top_k=10)
             if not pool:
                 return {"context": "No relevant documents found"}
+
+            # 4a. Run any supplementary expansion queries and merge into pool.
+            # Expansion queries are keyword-tuned phrases crafted to surface specific
+            # documented content. We use keyword_search (not hybrid) so that the
+            # exact Garífuna vocabulary in the expansion phrase drives retrieval
+            # rather than semantic similarity to unrelated pages.
+            # Track expansion doc keys separately so we can guarantee their presence
+            # in final_docs — without that guarantee, the citation validator may tag
+            # citations from these docs as UNVERIFIED even when the LLM correctly cites them.
+            pool_keys = {self._doc_key(d.get("page_content", ""), d.get("metadata") or {}) for d in pool}
+            _expansion_doc_keys: set[tuple] = set()
+            for exp_q in _extra_expansion_queries:
+                kw_hits = self.vector_store.keyword_search(exp_q, k=5)
+                for hit in kw_hits:
+                    content = (hit.get("document") or "").strip()
+                    if not content:
+                        continue
+                    metadata = dict(hit.get("metadata") or {})
+                    keyword_score = float(hit.get("keyword_score", 0.0))
+                    doc = {
+                        "page_content": content,
+                        "metadata": metadata,
+                        "vector_score": None,
+                        "keyword_score": keyword_score,
+                        "hybrid_score": keyword_score * 0.6,
+                        "retrieval_source": "keyword_expansion",
+                    }
+                    key = self._doc_key(content, metadata)
+                    if key not in pool_keys:
+                        pool.append(doc)
+                        pool_keys.add(key)
+                    _expansion_doc_keys.add(key)
 
             # 4b. Multi-part query: also retrieve for the second sub-query so each
             #     distinct topic gets its own evidence in the pool.
@@ -657,8 +784,35 @@ class Nodes:
                             final_docs = final_docs[:-1] + [doc]
                             break
 
+            # 7c. Guarantee expansion docs appear in final_docs.
+            # Expansion docs contain the evidence the LLM will cite; if they fall
+            # outside the top-5 by score (or were filtered by _filter_low_info),
+            # the citation validator will flag citations from them as UNVERIFIED.
+            # We search the full pool (not just ranked) so filtered docs are still
+            # eligible for injection.
+            if _expansion_doc_keys and final_docs:
+                final_keys = {self._doc_key(d.get("page_content", ""), d.get("metadata") or {}) for d in final_docs}
+                missing_expansions = [
+                    d for d in pool
+                    if self._doc_key(d.get("page_content", ""), d.get("metadata") or {}) in _expansion_doc_keys
+                    and self._doc_key(d.get("page_content", ""), d.get("metadata") or {}) not in final_keys
+                ]
+                if missing_expansions:
+                    # Inject the best-scored missing expansion doc, replacing the last final doc.
+                    best_exp = max(missing_expansions, key=lambda d: d.get("hybrid_score", 0))
+                    final_docs = final_docs[:-1] + [best_exp]
+
+            rag_context = self._build_context(final_docs)
+
+            # Prepend LEXICON_NOTE when the lexical path fired but returned no rows.
+            # This deterministic signal prevents the LLM from substituting a
+            # general-knowledge translation for a term not in the approved sources.
+            if _lexicon_miss_term:
+                note = self._build_lexicon_miss_context(_lexicon_miss_term, _lexicon_miss_language or "")
+                rag_context = note + "\n\n" + rag_context
+
             return {
-                "context": self._build_context(final_docs),
+                "context": rag_context,
                 "retrieved_docs": final_docs,
             }
         except Exception as e:
