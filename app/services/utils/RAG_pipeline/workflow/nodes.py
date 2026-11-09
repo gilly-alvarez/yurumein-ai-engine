@@ -82,9 +82,16 @@ _CONTEXTUAL_QUERY_EXPANSIONS: list[tuple] = [
         "Garífuna II p.108: name-exchange Q&A",
     ),
     (
-        re.compile(r'\b[Dd][üu][gG][üu]\b|\b[Cc]hug[uú]\b|\bGayunari\b|\bDabuyaba\b', re.IGNORECASE),
+        re.compile(r'\b[Dd][üu]{1,2}[gG][üu]{1,2}\b|\b[Cc]hug[uú]\b|\bGayunari\b|\bDabuyaba\b', re.IGNORECASE),
         "Gayunari Dabuyaba",
         "Diccionario p.43 / Garífuna II p.105: Dügü→Gayunari, Chugú→Dabuyaba",
+    ),
+    (
+        # Counting / numbers queries: surface Serie I p.8 number list.
+        # SOURCE: Libro Serie I p.8 — Aban=Uno(1), Biáma=Dos(2), Ürüwa=Tres(3)
+        re.compile(r'\b(?:count|number[s]?|numeros?|contar)\b', re.IGNORECASE),
+        "Aban biama urüwa",
+        "Serie I p.8/p.45: Aban=1 (Uno), Biáma=2 (Dos), Ürüwa=3 (Tres)",
     ),
 ]
 
@@ -676,6 +683,33 @@ class Nodes:
                         key = self._doc_key(chunk.get("page_content", ""), chunk.get("metadata") or {})
                         if key not in constrained or chunk.get("hybrid_score", 0) > constrained[key].get("hybrid_score", 0):
                             constrained[key] = chunk
+                # Apply contextual expansion within the constrained source pool.
+                # Runs the same expansions as path 2.7 but keyword-scoped to the named
+                # source, so "According to Libro X, what is Duguu?" surfaces p.105.
+                for _pattern, _exp_q, _note in _CONTEXTUAL_QUERY_EXPANSIONS:
+                    if _pattern.search(query):
+                        kw_hits = self.vector_store.source_keyword_search(
+                            _exp_q, book_result.source_pattern, k=5
+                        )
+                        for hit in kw_hits:
+                            content = (hit.get("document") or "").strip()
+                            if not content:
+                                continue
+                            metadata = dict(hit.get("metadata") or {})
+                            keyword_score = float(hit.get("keyword_score", 0.0))
+                            key = self._doc_key(content, metadata)
+                            if key not in constrained:
+                                constrained[key] = {
+                                    "page_content": content,
+                                    "metadata": metadata,
+                                    "vector_score": None,
+                                    "keyword_score": keyword_score,
+                                    "hybrid_score": keyword_score * 0.6,
+                                    "retrieval_source": "keyword_expansion",
+                                    "initial_rank": len(constrained) + 1,
+                                }
+                        break
+
                 if constrained:
                     sorted_constrained = sorted(constrained.values(), key=lambda d: d.get("hybrid_score", 0), reverse=True)
                     final_constrained = self._filter_low_info(sorted_constrained)[:5]
