@@ -71,10 +71,23 @@ class Translater:
         return self._cached_garifuna_words  # type: ignore[return-value]
 
     def _retrieve_context(self, text: str) -> str:
-        """Keyword retrieval from the curated vector store. Returns empty string on miss or error."""
+        """Hybrid retrieval (keyword + semantic) from the curated vector store."""
         try:
-            docs = self.vector_store.keyword_search(query=text, k=5)
-            chunks = [d["document"] for d in docs if (d.get("document") or "").strip()]
+            seen: set[str] = set()
+            chunks: list[str] = []
+
+            for d in self.vector_store.keyword_search(query=text, k=5):
+                chunk = (d.get("document") or "").strip()
+                if chunk and chunk not in seen:
+                    seen.add(chunk)
+                    chunks.append(chunk)
+
+            for doc in self.vector_store.similarity_search(query=text, k=5):
+                chunk = (doc.page_content or "").strip()
+                if chunk and chunk not in seen:
+                    seen.add(chunk)
+                    chunks.append(chunk)
+
             return "\n---\n".join(chunks)
         except Exception:
             return ""
@@ -142,8 +155,9 @@ Provide only the translated output in {target_language}."""
             decline_msg = _DECLINE_RESPONSE.get(ui_lang, _DECLINE_RESPONSE["en"])
 
             is_garifuna_target = target_language.lower() == "garifuna"
+            is_garifuna_source = base_language.lower() == "garifuna"
 
-            # Lexicon-first exact lookup for Garífuna targets.
+            # Lexicon-first exact lookup for Garífuna targets (EN/ES → Garífuna).
             if is_garifuna_target:
                 r = self.lexicon.lookup(text, base_language)
                 if r:
@@ -155,7 +169,20 @@ Provide only the translated output in {target_language}."""
                     if distinct_forms:
                         return llm_response(translation="; ".join(distinct_forms))
 
-            # Keyword retrieval from the curated vector store.
+            # Lexicon-first reverse lookup for Garífuna source (Garífuna → EN/ES).
+            if is_garifuna_source and not is_garifuna_target:
+                r = self.lexicon.reverse_lookup(text)
+                if r:
+                    col = "english" if "english" in target_language.lower() else "spanish"
+                    forms = []
+                    for row in r:
+                        val = (row.get(col) or "").strip()
+                        if val and val not in forms:
+                            forms.append(val)
+                    if forms:
+                        return llm_response(translation="; ".join(forms))
+
+            # Hybrid retrieval from the curated vector store.
             context = self._retrieve_context(text)
 
             # No context → verified database gap.
