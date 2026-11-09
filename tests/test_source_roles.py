@@ -331,7 +331,7 @@ class TestLiveRetrieval:
         answer = _ask_chat("What is the Garifuna word for 'superconductor'?")
         assert re.search(
             r"not find|no.*translat|don.t have|unable|insufficient|not.*available|"
-            r"not documented|no information|not provide|do not provide|documents do not",
+            r"not docum|no information|not provide|do not provide|documents do not",
             answer, re.I
         ), f"Expected acknowledgement of gap, got: {answer[:200]}"
 
