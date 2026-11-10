@@ -24,6 +24,15 @@ class SourceMeta:
 # Ordered: first match wins, so put the most specific keys first.
 _ROLE_MAP: list[tuple[str, SourceMeta]] = [
     (
+        "YURUMEIN_AI_HISTORIA_ES_EN_V1.2_AUDITADA",
+        SourceMeta(
+            role="HISTORICAL_KNOWLEDGE_DRAFT",
+            display="Yurumein AI — Historia v1.2 (cultural review pending)",
+            priority=5,
+            attribution="Bilingual historical reference draft; original references S1–S15",
+        ),
+    ),
+    (
         "LIBRO SERIE I",
         SourceMeta(
             role="FOUNDATIONAL_LANGUAGE_EDUCATION",

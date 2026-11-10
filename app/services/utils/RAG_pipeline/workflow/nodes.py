@@ -14,6 +14,7 @@ from .state import ChatState
 from app.services.chatbot.lexical_parser import parse_lexical_request, parse_definition_request, parse_page_request, parse_book_request
 from app.services.chatbot.intent_router import Intent, detect_intent, preferred_roles_for
 from app.services.chatbot.source_classifier import classify_source, source_display_name
+from app.services.chatbot.historical_knowledge import is_history_file, source_attribution, source_ids, layer_of
 from app.services.lexicon.lexicon import YurumeinLexicon
 
 # Chunks shorter than this are likely blank worksheet lines or bare headers.
@@ -378,10 +379,24 @@ class Nodes:
             meta = classify_source(source_path)
             abbrev = self._EID_ABBREV.get(meta.role, "DOC") if meta else "DOC"
             eid = f"EID-{index}:{abbrev}:p{page_label}" if page_label else f"EID-{index}:{abbrev}"
-            parts.append(
-                f"[{eid} | Source: {source_citation} | Retrieval: {retrieval_source}]\n"
-                f"{doc.get('page_content', '')}"
-            )
+            content = doc.get("page_content", "")
+            if is_history_file(source_path):
+                original_sources = source_attribution(metadata, content)
+                parts.append(
+                    f"[{eid} | Source: {source_citation} | "
+                    f"Evidence: {metadata.get('status', 'see original passage')} | "
+                    f"Layer: {layer_of(metadata, content) or 'unclassified'} | "
+                    f"Review: pending_cultural_review | Retrieval: {retrieval_source}]\n"
+                    f"{content}\n"
+                    f"[Original bibliography references: {original_sources or 'not present in this chunk'}]\n"
+                    "Editorial warning: This historical draft is not a verified lexicon "
+                    "source and has not passed Garifuna cultural review."
+                )
+            else:
+                parts.append(
+                    f"[{eid} | Source: {source_citation} | Retrieval: {retrieval_source}]\n"
+                    f"{content}"
+                )
         return "\n\n".join(parts)
 
     def _build_lexicon_miss_context(self, term: str, language: str) -> str:
@@ -544,7 +559,7 @@ class Nodes:
             return [parts[0].strip(), parts[1].strip()]
         return [query]
 
-    def _validate_citations(self, response: str, retrieved_docs: list[dict]) -> str:
+    def _validate_citations(self, response: str, retrieved_docs: list[dict], language: str = "") -> str:
         """
         Post-generate validation of every **Source:** and [Source: ...] citation.
 
@@ -556,6 +571,58 @@ class Nodes:
         if not retrieved_docs:
             return response
 
+        # For historical drafts the upload filename is not a historical
+        # authority. Retain only bibliographic IDs present in retrieved chunks.
+        history_docs = [
+            d for d in retrieved_docs
+            if is_history_file((d.get("metadata") or {}).get("source", ""))
+        ]
+        if history_docs:
+            allowed = set()
+            for doc in history_docs:
+                allowed.update(source_ids(doc.get("metadata") or {}, doc.get("page_content", "")))
+
+            # Remove the upload-file citation produced by earlier RAG prompts.
+            response = re.sub(
+                r"(?im)^\s*(?:\*\*)?(?:Fuente|Source):(?:\*\*)?\s*"
+                r"Yurumein(?:[_ ]AI)?(?:[_ \u2014-]+)Historia[^\n]*$",
+                "",
+                response,
+            ).strip()
+
+            response = re.sub(
+                r"\[S\d{1,2}\]",
+                lambda m: m.group(0) if m.group(0)[1:-1] in allowed else "",
+                response,
+            )
+            if not re.search(r"\[S\d{1,2}\]", response) and allowed:
+                # The strongest retrieved history chunk is ranked first. Its
+                # explicit refs are more faithful than inventing a document cite.
+                first = history_docs[0]
+                refs = source_attribution(
+                    first.get("metadata") or {}, first.get("page_content", "")
+                )
+                if refs:
+                    use_spanish = language == "es" or (
+                        language not in ("es", "en")
+                        and bool(re.search(r"[¿¡áéíóúñ]", response, re.I))
+                    )
+                    response += "\n\n" + (
+                        "Fuentes originales: " if use_spanish else "Original sources: "
+                    ) + refs
+
+            use_spanish = language == "es" or (
+                language not in ("es", "en")
+                and bool(re.search(r"[¿¡áéíóúñ]", response, re.I))
+            )
+            review_note = (
+                "Nota editorial: pendiente de revisión cultural garífuna."
+                if use_spanish else
+                "Editorial note: pending Garifuna cultural review."
+            )
+            if review_note not in response:
+                response += "\n\n" + review_note
+
         # Build lookup: book_display_lower → {page_label_str, ...}
         retrieved_pages: dict[str, set[str]] = {}
         for doc in retrieved_docs:
@@ -566,6 +633,12 @@ class Nodes:
 
         def _claim_valid(claim: str) -> bool:
             claim_l = claim.strip().lower()
+            # Historical [S#] references are governed by explicit source IDs,
+            # not the page-number citation system used for printed textbooks.
+            if history_docs:
+                cited = re.findall(r"\[S\d{1,2}\]", claim)
+                if cited:
+                    return all(sid[1:-1] in allowed for sid in cited)
             matched_book = next((b for b in retrieved_pages if b in claim_l), None)
             if not matched_book:
                 return False
@@ -873,6 +946,33 @@ class Nodes:
                     best_exp = max(missing_expansions, key=lambda d: d.get("hybrid_score", 0))
                     final_docs = final_docs[:-1] + [best_exp]
 
+            # Never send a Van Sertima hypothesis (layer B) without a
+            # critical-evaluation chunk (layer C). If critique is unavailable,
+            # omit layer B rather than presenting an isolated conjecture.
+            has_hypothesis = any(
+                layer_of(d.get("metadata") or {}, d.get("page_content", "")) == "B"
+                for d in final_docs
+            )
+            has_critique = any(
+                layer_of(d.get("metadata") or {}, d.get("page_content", "")) == "C"
+                for d in final_docs
+            )
+            if has_hypothesis and not has_critique:
+                critique = next(
+                    (
+                        d for d in ranked
+                        if layer_of(d.get("metadata") or {}, d.get("page_content", "")) == "C"
+                    ),
+                    None,
+                )
+                if critique:
+                    final_docs = final_docs[:4] + [critique]
+                else:
+                    final_docs = [
+                        d for d in final_docs
+                        if layer_of(d.get("metadata") or {}, d.get("page_content", "")) != "B"
+                    ]
+
             rag_context = self._build_context(final_docs)
 
             # Prepend LEXICON_NOTE when the lexical path fired but returned no rows.
@@ -945,7 +1045,8 @@ class Nodes:
             )
             response = await self.llm.ainvoke(prompt)
             validated = self._validate_citations(
-                response.content, state.get("retrieved_docs") or []
+                response.content, state.get("retrieved_docs") or [],
+                language=(state.get("language") or "").strip().lower(),
             )
             return {"response": validated}
         except Exception as e:

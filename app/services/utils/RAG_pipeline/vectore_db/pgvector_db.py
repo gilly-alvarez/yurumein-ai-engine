@@ -254,6 +254,58 @@ class VectorStoreManager:
             print(f"Source keyword search error: {e}")
             return []
 
+    def replace_history_documents(self, documents: List[Document]) -> List[str]:
+        """Re-ingest one reviewed-format history file without retaining stale chunks.
+
+        Collect IDs before insertion; only delete those older IDs after the
+        new 28 Q&As have been inserted successfully. Limit deletion to the same
+        collection and exact filename. Do not change other indexed sources.
+        """
+        if len(documents) != 28 or not all(
+            d.metadata.get("doc_type") == "historical_qa" for d in documents
+        ):
+            raise ValueError("Expected exactly 28 structured historical Q&A records.")
+
+        filename = documents[0].metadata["filename"]
+        if any(d.metadata.get("filename") != filename for d in documents):
+            raise ValueError("All historical records must belong to one source file.")
+
+        select_sql = """
+            SELECT e.id::text AS id
+            FROM langchain_pg_embedding AS e
+            JOIN langchain_pg_collection AS c ON e.collection_id = c.uuid
+            WHERE c.name = :collection_name
+              AND e.cmetadata->>'filename' = :filename
+        """
+        with self._engine.connect() as conn:
+            old_ids = [
+                row["id"] for row in conn.execute(
+                    text(select_sql),
+                    {"collection_name": self.collection_name, "filename": filename},
+                ).mappings().all()
+            ]
+
+        new_ids = self.add_documents(documents)
+        if old_ids:
+            delete_sql = """
+                DELETE FROM langchain_pg_embedding AS e
+                USING langchain_pg_collection AS c
+                WHERE e.collection_id = c.uuid
+                  AND c.name = :collection_name
+                  AND e.cmetadata->>'filename' = :filename
+                  AND e.id::text = ANY(:old_ids)
+            """
+            with self._engine.begin() as conn:
+                conn.execute(
+                    text(delete_sql),
+                    {
+                        "collection_name": self.collection_name,
+                        "filename": filename,
+                        "old_ids": old_ids,
+                    },
+                )
+        return new_ids
+
     def delete_collection(self):
         """Clear all data in this collection."""
         self.vector_store.delete_collection()
@@ -270,6 +322,9 @@ def upload_docs_pipeline(file_paths: Optional[List[str]] = None):
             return []
 
         v_store = VectorStoreManager()
+        if all(d.metadata.get("doc_type") == "historical_qa" for d in chunks):
+            return v_store.replace_history_documents(chunks)
+
         ids = v_store.add_documents(chunks)
         return ids
     except Exception as e:
