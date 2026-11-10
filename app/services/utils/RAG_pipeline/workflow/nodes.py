@@ -559,7 +559,7 @@ class Nodes:
             return [parts[0].strip(), parts[1].strip()]
         return [query]
 
-    def _validate_citations(self, response: str, retrieved_docs: list[dict]) -> str:
+    def _validate_citations(self, response: str, retrieved_docs: list[dict], language: str = "") -> str:
         """
         Post-generate validation of every **Source:** and [Source: ...] citation.
 
@@ -585,7 +585,7 @@ class Nodes:
             # Remove the upload-file citation produced by earlier RAG prompts.
             response = re.sub(
                 r"(?im)^\s*(?:\*\*)?(?:Fuente|Source):(?:\*\*)?\s*"
-                r"Yurumein(?:[_ ]AI)?[_ ]Historia[^\n]*$",
+                r"Yurumein(?:[_ ]AI)?(?:[_ \u2014-]+)Historia[^\n]*$",
                 "",
                 response,
             ).strip()
@@ -603,15 +603,22 @@ class Nodes:
                     first.get("metadata") or {}, first.get("page_content", "")
                 )
                 if refs:
+                    use_spanish = language == "es" or (
+                        language not in ("es", "en")
+                        and bool(re.search(r"[¿¡áéíóúñ]", response, re.I))
+                    )
                     response += "\n\n" + (
-                        "Fuentes originales: " if re.search(r"[¿¡áéíóúñ]", response, re.I)
-                        else "Original sources: "
+                        "Fuentes originales: " if use_spanish else "Original sources: "
                     ) + refs
 
+            use_spanish = language == "es" or (
+                language not in ("es", "en")
+                and bool(re.search(r"[¿¡áéíóúñ]", response, re.I))
+            )
             review_note = (
                 "Nota editorial: pendiente de revisión cultural garífuna."
-                if re.search(r"[¿¡áéíóúñ]", response, re.I)
-                else "Editorial note: pending Garifuna cultural review."
+                if use_spanish else
+                "Editorial note: pending Garifuna cultural review."
             )
             if review_note not in response:
                 response += "\n\n" + review_note
@@ -626,6 +633,12 @@ class Nodes:
 
         def _claim_valid(claim: str) -> bool:
             claim_l = claim.strip().lower()
+            # Historical [S#] references are governed by explicit source IDs,
+            # not the page-number citation system used for printed textbooks.
+            if history_docs:
+                cited = re.findall(r"\[S\d{1,2}\]", claim)
+                if cited:
+                    return all(sid[1:-1] in allowed for sid in cited)
             matched_book = next((b for b in retrieved_pages if b in claim_l), None)
             if not matched_book:
                 return False
@@ -1032,7 +1045,8 @@ class Nodes:
             )
             response = await self.llm.ainvoke(prompt)
             validated = self._validate_citations(
-                response.content, state.get("retrieved_docs") or []
+                response.content, state.get("retrieved_docs") or [],
+                language=(state.get("language") or "").strip().lower(),
             )
             return {"response": validated}
         except Exception as e:
