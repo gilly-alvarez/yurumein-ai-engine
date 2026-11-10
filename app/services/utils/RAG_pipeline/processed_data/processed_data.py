@@ -15,6 +15,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 import pytesseract
 from PIL import Image
 
+from app.services.chatbot.historical_knowledge import is_history_file, parse_history_qa
+
 
 class ProcessedData:
     def __init__(self, file_paths: Optional[List[str]] = None):
@@ -156,8 +158,26 @@ class ProcessedData:
             separators=["\n## ", "\n\n", "\n- ", "\n", ". ", " ", ""],
         )
 
-        raw_chunks = splitter.split_documents(all_docs)
-        chunks: List[Document] = []
+        # Historical Q&A uploads must not be split across arbitrary 800-char
+        # boundaries: that can detach evidence labels and source IDs from claims.
+        structured: List[Document] = []
+        generic: List[Document] = []
+        for document in all_docs:
+            source_path = (document.metadata or {}).get("source", "")
+            if is_history_file(source_path):
+                parsed = parse_history_qa(document.page_content, source_path)
+                if len(parsed) != 28:
+                    raise ValueError(
+                        "Yurumein history ingestion requires 28 complete "
+                        "ES/EN Q&A records with status, layer and sources."
+                    )
+                for passage, metadata in parsed:
+                    structured.append(Document(page_content=passage, metadata=metadata))
+            else:
+                generic.append(document)
+
+        raw_chunks = splitter.split_documents(generic)
+        chunks: List[Document] = list(structured)
         for chunk_index, chunk in enumerate(raw_chunks):
             cleaned_text = self._clean_text(chunk.page_content or "")
             if not cleaned_text:
