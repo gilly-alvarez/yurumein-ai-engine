@@ -30,6 +30,23 @@ HISTORY_REFERENCES: dict[str, str] = {
     "S15": "Adrian Fraser, Chatoyer, Joseph, Oxford (2016)",
 }
 
+# URLs from the audited bibliography. Never invent URLs for S1, S6 or S14.
+HISTORY_LINKS: dict[str, str] = {
+    "S2": "https://ich.unesco.org/en/RL/language-dance-and-music-of-the-garifuna-00001",
+    "S3": "https://festival.si.edu/2013/one-world-many-voices/language-communities/garifuna/smithsonian",
+    "S4": "https://doi.org/10.1086/204626",
+    "S5": "https://westindiacommittee.org/historyheritageculture/wp-content/uploads/2024/03/The-exile-of-the-Garinagu.pdf",
+    "S7": "https://www.elalliance.org/languages/garifuna",
+    "S8": "https://doi.org/10.17533/udea.boan.v31n51a02",
+    "S9": "https://www.belize-glessimaresearch.org/wp-content/uploads/bsk-pdf-manager/2020/01/Garifuna-History-Timeline.pdf",
+    "S10": "https://www.categories.belizelivingheritage.org/?p=1593",
+    "S11": "https://searchlight.vc/uncategorized/2015/07/24/the-carib-garifuna-story",
+    "S12": "https://doi.org/10.1038/s41586-020-03053-2",
+    "S13": "https://doi.org/10.1002/ajpa.23859",
+    "S15": "https://doi.org/10.1093/acref/9780195301731.013.73630",
+}
+
+
 _QA_HEADING = re.compile(
     r"(?m)^###\s+(yh001-(es|en)-q(\d{2}))\s+[—-]\s+(.+?)\s*$"
 )
@@ -61,7 +78,11 @@ def source_ids(metadata: dict, content: str = "") -> list[str]:
 
 
 def source_attribution(metadata: dict, content: str = "") -> str:
-    return "; ".join(f"[{s}] {HISTORY_REFERENCES[s]}" for s in source_ids(metadata, content))
+    return "; ".join(
+        f"[{s}] {HISTORY_REFERENCES[s]}"
+        + (f" ({HISTORY_LINKS[s]})" if s in HISTORY_LINKS else "")
+        for s in source_ids(metadata, content)
+    )
 
 
 def layer_of(metadata: dict, content: str = "") -> str:
