@@ -579,15 +579,26 @@ class Nodes:
         Post-generate validation of every **Source:**/**Fuente:** and
         [Source: ...]/[Fuente: ...] citation (English and Spanish).
 
+        Always runs — even when retrieved_docs is empty. When empty, all book
+        citations are stripped (nothing was retrieved to verify them against),
+        with one exception: "Yurumein Lexicon" citations are always preserved
+        because the lexicon path explicitly sets retrieved_docs=[] to clear
+        stale RAG state after returning verified structured-lexicon results.
+
+        For compound citations (multiple references separated by ";"), each
+        reference is validated independently. Valid sub-references are preserved;
+        invalid ones are stripped. A valid reference does NOT automatically
+        validate co-listed invalid references.
+
         Builds an exact lookup of (book_display_lower → {page_label}) from the
-        retrieved_docs for this turn, then checks every citation in the response
-        against that set. A citation is removed when:
+        retrieved_docs for this turn, then checks every citation against that set.
+        A citation is removed when:
           - the named book was not retrieved in this turn, OR
           - a specific page number is cited but that page was not in the retrieved set.
 
-        Note: "not in the retrieved set" is NOT equivalent to "does not exist in the
-        book." A page may exist in the source document without having been retrieved
-        or without that page's content supporting the specific claim being made.
+        Note: "not in the retrieved set" is NOT equivalent to "does not exist in
+        the book." A page may exist in the source document without having been
+        retrieved or without its content supporting the specific claim being made.
 
         Removed citations are logged internally. Their absence from the user-facing
         response does not validate the underlying historical assertion — it only means
@@ -598,49 +609,70 @@ class Nodes:
         """
         result = response
 
-        if retrieved_docs:
-            # Build lookup: book_display_lower → {page_label_str, ...}
-            retrieved_pages: dict[str, set[str]] = {}
-            for doc in retrieved_docs:
-                sm = classify_source((doc.get("metadata") or {}).get("source", ""))
-                if sm:
-                    page = str((doc.get("metadata") or {}).get("page_label", "") or "")
-                    retrieved_pages.setdefault(sm.display.lower(), set()).add(page)
+        # Build lookup: book_display_lower → {page_label_str, ...}
+        # When retrieved_docs is empty the lookup is also empty — all book citations
+        # fail validation and are stripped (except the Yurumein Lexicon sentinel).
+        retrieved_pages: dict[str, set[str]] = {}
+        for doc in retrieved_docs:
+            sm = classify_source((doc.get("metadata") or {}).get("source", ""))
+            if sm:
+                page = str((doc.get("metadata") or {}).get("page_label", "") or "")
+                retrieved_pages.setdefault(sm.display.lower(), set()).add(page)
 
-            def _claim_valid(claim: str) -> bool:
-                claim_l = claim.strip().lower()
-                matched_book = next((b for b in retrieved_pages if b in claim_l), None)
-                if not matched_book:
-                    return False
-                claimed_pages = re.findall(r"\b(\d+)\b", claim_l)
-                if not claimed_pages:
-                    return True  # book-level citation, no page demanded — accept
-                return any(p in retrieved_pages[matched_book] for p in claimed_pages)
+        def _single_ref_valid(ref: str) -> bool:
+            ref_l = ref.strip().lower()
+            # Yurumein Lexicon citations are always valid — the lexicon path sets
+            # retrieved_docs=[] to clear stale RAG state, but its own citations
+            # originate from verified structured-lexicon lookups, not fabrication.
+            if "yurumein lexicon" in ref_l:
+                return True
+            matched_book = next((b for b in retrieved_pages if b in ref_l), None)
+            if not matched_book:
+                return False
+            claimed_pages = re.findall(r"\b(\d+)\b", ref_l)
+            if not claimed_pages:
+                return True  # book-level citation, no page demanded — accept
+            return any(p in retrieved_pages[matched_book] for p in claimed_pages)
 
-            def _fix_bold(m: re.Match) -> str:
-                claim = m.group(1).strip()
-                if _claim_valid(claim):
-                    return m.group(0)
-                print(f"[citation-validator] stripped | claim={claim!r} | reason=not_in_retrieved_set")
+        def _split_and_validate(claim: str) -> tuple[list[str], list[str]]:
+            """Split a compound citation on ';' and validate each part independently."""
+            refs = [r.strip() for r in re.split(r";\s*", claim) if r.strip()]
+            valid = [r for r in refs if _single_ref_valid(r)]
+            invalid = [r for r in refs if not _single_ref_valid(r)]
+            return valid, invalid
+
+        def _fix_bold(m: re.Match) -> str:
+            claim = m.group(1).strip()
+            valid, invalid = _split_and_validate(claim)
+            reason = "no_retrieved_docs" if not retrieved_docs else "not_in_retrieved_set"
+            for r in invalid:
+                print(f"[citation-validator] stripped | claim={r!r} | reason={reason}")
+            if not valid:
                 return ""
+            new_claim = "; ".join(valid)
+            return m.group(0).replace(m.group(1), new_claim)
 
-            def _fix_bracket(m: re.Match) -> str:
-                claim = m.group(1).strip()
-                if _claim_valid(claim):
-                    return m.group(0)
-                print(f"[citation-validator] stripped | claim={claim!r} | reason=not_in_retrieved_set")
+        def _fix_bracket(m: re.Match) -> str:
+            claim = m.group(1).strip()
+            valid, invalid = _split_and_validate(claim)
+            reason = "no_retrieved_docs" if not retrieved_docs else "not_in_retrieved_set"
+            for r in invalid:
+                print(f"[citation-validator] stripped | claim={r!r} | reason={reason}")
+            if not valid:
                 return ""
+            new_claim = "; ".join(valid)
+            return m.group(0).replace(m.group(1), new_claim)
 
-            # Validate bold citations: **Source:** and **Fuente:** (Spanish)
-            result = re.sub(
-                r"\*\*(?:Source|Fuente):\*\*\s*([^\n*]+)",
-                _fix_bold, result, flags=re.IGNORECASE,
-            )
-            # Validate bracket citations: [Source: ...] and [Fuente: ...]
-            result = re.sub(
-                r"\[(?:Source|Fuente):\s*([^\]]+)\]",
-                _fix_bracket, result, flags=re.IGNORECASE,
-            )
+        # Validate bold citations: **Source:** and **Fuente:** (Spanish)
+        result = re.sub(
+            r"\*\*(?:Source|Fuente):\*\*\s*([^\n*]+)",
+            _fix_bold, result, flags=re.IGNORECASE,
+        )
+        # Validate bracket citations: [Source: ...] and [Fuente: ...]
+        result = re.sub(
+            r"\[(?:Source|Fuente):\s*([^\]]+)\]",
+            _fix_bracket, result, flags=re.IGNORECASE,
+        )
 
         # Always strip any remaining [UNVERIFIED: ...] placeholders — these must
         # never reach users regardless of how they arrived in the string.

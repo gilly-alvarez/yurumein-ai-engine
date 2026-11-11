@@ -1867,8 +1867,136 @@ class TestCitationIntegrity:
         old session stored in chat history), the final strip pass removes it.
         """
         inst = self._nodes()
-        # Pass empty retrieved_docs so the validation block is skipped — only
-        # the unconditional strip pass runs.
         resp = "Some claim.\n**Source:** [UNVERIFIED: Diccionario Garífuna — page 199]"
         result = inst._validate_citations(resp, [])
+        assert "[UNVERIFIED:" not in result
+
+    # ── Edge Case 1: empty retrieved_docs — all fabricated citations stripped ──
+
+    def test_fabricated_source_stripped_when_no_docs_retrieved(self):
+        """
+        When retrieved_docs=[], the validator runs with an empty book lookup.
+        Any **Source:** citation is unverifiable and must be stripped.
+        The claim text survives — only the unverifiable citation line is removed.
+        """
+        inst = self._nodes()
+        resp = "Some historical claim.\n**Source:** Diccionario Garífuna — page 199"
+        result = inst._validate_citations(resp, [])
+        assert "Diccionario Garífuna" not in result, (
+            "Fabricated Source citation must be stripped when no docs were retrieved."
+        )
+        assert "Some historical claim." in result, "Claim text must survive citation stripping."
+        assert "[UNVERIFIED:" not in result
+
+    def test_fabricated_fuente_stripped_when_no_docs_retrieved(self):
+        """Spanish **Fuente:** citations are also stripped when retrieved_docs is empty."""
+        inst = self._nodes()
+        resp = "Alguna afirmación histórica.\n**Fuente:** Diccionario Garífuna — página 199"
+        result = inst._validate_citations(resp, [])
+        assert "Diccionario Garífuna" not in result
+        assert "Alguna afirmación histórica." in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_fabricated_bracket_citation_stripped_when_no_docs_retrieved(self):
+        """Bracket [Source: ...] format is also stripped when retrieved_docs is empty."""
+        inst = self._nodes()
+        resp = "Some claim. [Source: Libro Serie I — page 21]"
+        result = inst._validate_citations(resp, [])
+        assert "Libro Serie I" not in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_verified_lexicon_citation_preserved_when_no_docs_retrieved(self):
+        """
+        'Yurumein Lexicon' citations are preserved even when retrieved_docs=[].
+        The lexicon path sets retrieved_docs=[] to clear stale RAG state after
+        returning verified structured-lexicon results — not because nothing was found.
+        Stripping these citations would remove verified, mission-critical vocabulary.
+        """
+        inst = self._nodes()
+        resp = "The Garífuna word for water is Duna.\n**Source:** Yurumein Lexicon"
+        result = inst._validate_citations(resp, [])
+        assert "Yurumein Lexicon" in result, (
+            "Verified lexicon citations must be preserved even when retrieved_docs is empty."
+        )
+        assert "[UNVERIFIED:" not in result
+
+    def test_verified_lexicon_fuente_preserved_when_no_docs_retrieved(self):
+        """Spanish **Fuente:** Yurumein Lexicon citations are also preserved."""
+        inst = self._nodes()
+        resp = "La palabra garífuna para agua es Duna.\n**Fuente:** Yurumein Lexicon"
+        result = inst._validate_citations(resp, [])
+        assert "Yurumein Lexicon" in result
+        assert "[UNVERIFIED:" not in result
+
+    # ── Edge Case 2: compound citations — each reference validated independently ─
+
+    def test_compound_citation_valid_ref_preserved_invalid_stripped(self):
+        """
+        In a compound citation 'Diccionario Garífuna — page 6; Document', the first
+        reference is valid (page 6 is in the retrieved set) but 'Document' is not a
+        recognized source. The valid part is preserved; 'Document' is stripped.
+        A valid reference must NOT automatically validate co-listed invalid references.
+        """
+        inst = self._nodes()
+        docs = [
+            {"metadata": {"source": "DICCIONARIO GARIFUNA.pdf", "page_label": "6"}, "page_content": "x"},
+        ]
+        resp = "Some claim.\n**Source:** Diccionario Garífuna — page 6; Document"
+        result = inst._validate_citations(resp, docs)
+        assert "Diccionario Garífuna — page 6" in result, (
+            "The valid part of a compound citation must be preserved."
+        )
+        assert "Document" not in result, (
+            "The unrecognized 'Document' ref must be stripped even though the first ref was valid."
+        )
+        assert "[UNVERIFIED:" not in result
+
+    def test_compound_citation_all_invalid_strips_entirely(self):
+        """When every part of a compound citation is invalid, the whole citation is removed."""
+        inst = self._nodes()
+        docs = [
+            {"metadata": {"source": "LIBRO SERIE I.pdf", "page_label": "4"}, "page_content": "x"},
+        ]
+        resp = "Some claim.\n**Source:** Libro Garífuna II — page 5; Document"
+        result = inst._validate_citations(resp, docs)
+        assert "Libro Garífuna II" not in result
+        assert "Document" not in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_compound_fuente_mixed_citation_bilingual(self):
+        """
+        Spanish **Fuente:** with a compound citation: valid reference preserved,
+        invalid reference stripped independently. Bilingual format parity with Source.
+        """
+        inst = self._nodes()
+        docs = [
+            {"metadata": {"source": "LIBRO GARIFUNA II FORMATO DIGITAL.pdf", "page_label": "105"}, "page_content": "x"},
+        ]
+        resp = "Texto en español.\n**Fuente:** Libro Garífuna II — página 105; Documento"
+        result = inst._validate_citations(resp, docs)
+        assert "Libro Garífuna II" in result, (
+            "The valid Fuente reference must be preserved in a compound citation."
+        )
+        assert "Documento" not in result, (
+            "The invalid 'Documento' ref must be stripped from the compound Fuente citation."
+        )
+        assert "[UNVERIFIED:" not in result
+
+    def test_compound_bracket_citation_partial_validation(self):
+        """
+        Bracket [Source: ...] with compound refs: valid reference kept, invalid stripped.
+        One retrieved book/page does not cover a co-listed unretrieved book/page.
+        """
+        inst = self._nodes()
+        docs = [
+            {"metadata": {"source": "DICCIONARIO GARIFUNA.pdf", "page_label": "43"}, "page_content": "x"},
+        ]
+        resp = "Some claim. [Source: Diccionario Garífuna — page 43; Libro Serie I — page 99]"
+        result = inst._validate_citations(resp, docs)
+        assert "Diccionario Garífuna — page 43" in result, (
+            "The retrieved Diccionario page 43 reference must be preserved."
+        )
+        assert "Libro Serie I" not in result, (
+            "Libro Serie I was not retrieved — its co-listed ref must be stripped independently."
+        )
         assert "[UNVERIFIED:" not in result
