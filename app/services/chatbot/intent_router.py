@@ -67,7 +67,9 @@ _INTENT_PATTERNS: list[tuple[re.Pattern, Intent]] = [
     (re.compile(
         r'\b(histor(?:y|ia)?|origin(?:es|s)?|culture|cultura|tradici[oó]n|tradition'
         r'|heritage|patrimonio|people|pueblo|migration|migraci[oó]n|ancestor|antepasado'
-        r'|garifuna\s+people|diaspora|deportation|deportaci[oó]n)\b',
+        r'|garifuna\s+people|diaspora|deportation|deportaci[oó]n'
+        r'|africa[n]?|pre-?columb(?:ian)?|before\s+columbus|contact\s+theor'
+        r'|shipwreck|resist(?:ance|encia)?|colonial(?:ism|ismo)?)\b',
         re.I,
     ), Intent.CULTURAL_HISTORICAL),
 

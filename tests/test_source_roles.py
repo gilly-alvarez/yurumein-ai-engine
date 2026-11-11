@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 import re
+import uuid
 import urllib.request
 import urllib.parse
 import json
@@ -1180,3 +1181,473 @@ class TestPhase5Regression:
             f"Expected Garífuna II chunk for origins query.\n"
             f"Got sources: {sources}"
         )
+
+
+# ─── PHASE 6 HELPERS ─────────────────────────────────────────────────────────
+
+def _ask_chat_with_session(question: str, session_id: str, lang: str = "en") -> str:
+    """Send a chat request within an existing session (multi-turn support)."""
+    data = urllib.parse.urlencode({
+        "user_prompt": question,
+        "user_id": "test_regression_multiturn",
+        "session_id": session_id,
+        "language": lang,
+    }).encode()
+    req = urllib.request.Request(
+        f"{AI_API}/chat",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read()).get("response", "")
+
+
+# ─── PHASE 6 REGRESSION TESTS ────────────────────────────────────────────────
+
+class TestAfricanContactAndVanSertima:
+    """
+    Tests for contested scholarly question handling and proportional historical engagement.
+
+    The assistant must discuss Van Sertima's thesis and pre-Columbian contact theories
+    substantively — presenting the academic debate without endorsing or silently dismissing.
+    Garifuna West African heritage must be distinguished from pre-Columbian contact claims.
+    """
+
+    @requires_service
+    def test_van_sertima_thesis_acknowledged(self):
+        # "What are Van Sertima's arguments?" must name the thesis or debate,
+        # not simply say the available sources don't cover it.
+        answer = _ask_chat(
+            "What are Ivan Van Sertima's arguments about African contact before Columbus?"
+        )
+        has_thesis_content = bool(re.search(
+            r"van\s+sertima|they\s+came\s+before|thesis|argument|contact|debate",
+            answer, re.I,
+        ))
+        is_pure_gap_disclaimer = (
+            bool(re.search(
+                r"(?:available\s+(?:sources|documents?)|retrieved)\s+do(?:es)?\s+not"
+                r"\s+(?:address|cover|contain|mention|discuss)",
+                answer, re.I,
+            ))
+            and not has_thesis_content
+        )
+        assert not is_pure_gap_disclaimer, (
+            f"Response dismisses the question with a source-gap disclaimer without "
+            f"engaging with the thesis.\nResponse: {answer[:400]}"
+        )
+        assert has_thesis_content, (
+            f"Response does not acknowledge Van Sertima's thesis or the debate.\n"
+            f"Response: {answer[:400]}"
+        )
+
+    @requires_service
+    def test_van_sertima_not_presented_as_established_fact(self):
+        # The response must qualify Van Sertima's thesis — it is a contested hypothesis,
+        # not established scholarship.
+        answer = _ask_chat(
+            "Is Van Sertima right that Africans came to America before Columbus?"
+        )
+        presents_as_established = bool(re.search(
+            r"\b(?:it\s+is\s+(?:established|confirmed|proven|a\s+fact)"
+            r"|historians\s+agree|widely\s+accepted|scientifically\s+proven"
+            r"|conclusively\s+shown)\b",
+            answer, re.I,
+        ))
+        assert not presents_as_established, (
+            f"Response presents Van Sertima's contested thesis as established fact.\n"
+            f"Response: {answer[:400]}"
+        )
+        has_qualification = bool(re.search(
+            r"debat|contest|disputed|hypothesis|argument|not.*universally"
+            r"|mainstream|counter|not.*accept|evidence.*(?:limit|weak|inconclus|absent)"
+            r"|scholar.*(?:disagree|question|dispute)|not.*widely\s+accepted",
+            answer, re.I,
+        ))
+        assert has_qualification, (
+            f"Response does not qualify Van Sertima's thesis appropriately.\n"
+            f"Response: {answer[:400]}"
+        )
+
+    @requires_service
+    def test_garifuna_african_heritage_addressed(self):
+        # Questions about African connection to the Garifuna must surface the
+        # West African ancestry documented in the sources — the mix of West African,
+        # Arawak, and Carib peoples — not just a source-gap disclaimer.
+        answer = _ask_chat(
+            "What connection is there between African history and the Garifuna people?"
+        )
+        has_heritage_content = bool(re.search(
+            r"west\s+african|africano|africa[n]?|arawak|carib"
+            r"|st\.?\s*vincent|yurumein|mezcla|mix",
+            answer, re.I,
+        ))
+        assert has_heritage_content, (
+            f"Response does not address Garifuna West African heritage.\n"
+            f"Response: {answer[:400]}"
+        )
+
+    @requires_service
+    def test_origin_account_not_asserted_as_sole_indisputable_fact(self):
+        # Specific founding event accounts (including the 1635 shipwreck narrative)
+        # involve documentary uncertainty and oral tradition; must not be presented
+        # as an indisputable documented fact free of any qualification.
+        answer = _ask_chat(
+            "How did West African people come to be part of Garifuna ancestry?"
+        )
+        # Flags a response that asserts a specific founding event as absolute fact
+        # without any qualifier (account/tradition/believed/reported/according/suggests).
+        has_firm_assertion = bool(re.search(r"it\s+is\s+(?:a\s+fact|documented|established)\s+that", answer, re.I))
+        has_qualifier = bool(re.search(
+            r"account|tradition|believed|reported|according|suggest|oral|narrative"
+            r"|histor(?:y|ians?)|sources?\s+(?:indicate|describe|report)",
+            answer, re.I,
+        ))
+        assert not has_firm_assertion or has_qualifier, (
+            f"Response asserts a founding-event account as absolute fact without "
+            f"any qualifier.\nResponse: {answer[:400]}"
+        )
+
+    @requires_service
+    def test_africa_query_routes_to_cultural_historical_intent(self):
+        # Verify intent routing: "African" in a cultural query must resolve to
+        # CULTURAL_HISTORICAL, which boosts Garifuna II retrieval.
+        from app.services.chatbot.intent_router import detect_intent, Intent
+        assert detect_intent("What is the African connection to Garifuna culture?") == Intent.CULTURAL_HISTORICAL
+        assert detect_intent("Did Africans come to America before Columbus?") == Intent.CULTURAL_HISTORICAL
+
+    def test_africa_intent_unit(self):
+        from app.services.chatbot.intent_router import detect_intent, Intent
+        assert detect_intent("Tell me about African influence on Garifuna heritage") == Intent.CULTURAL_HISTORICAL
+        assert detect_intent("What role did African ancestry play in Garifuna origins?") == Intent.CULTURAL_HISTORICAL
+
+    def test_colonial_resistance_intent_unit(self):
+        from app.services.chatbot.intent_router import detect_intent, Intent
+        assert detect_intent("How did the Garifuna resist colonial rule?") == Intent.CULTURAL_HISTORICAL
+
+
+# ─── PHASE 6: FOLLOW-UP CONTEXTUALIZATION ────────────────────────────────────
+
+class TestFollowUpContextualization:
+    """
+    Unit and integration tests for follow-up signal detection and conversation
+    advancement. The retrieval layer must anchor on the previous user query;
+    unrelated short questions must not inherit prior topic context.
+    """
+
+    # ── Unit: _FOLLOWUP_SIGNALS regex ─────────────────────────────────────────
+
+    def test_signal_english_that(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("Tell me more about that")
+
+    def test_signal_english_it(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("What is it used for?")
+
+    def test_signal_english_tell_me_more(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("Tell me more")
+
+    def test_signal_english_more_about(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("I want to know more about this")
+
+    def test_signal_spanish_eso(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("Háblame sobre eso")
+
+    def test_signal_spanish_esto(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("Cuéntame más sobre esto")
+
+    def test_signal_spanish_hablame(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("háblame de ello")
+
+    def test_signal_spanish_dime_mas(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("Dime más")
+
+    def test_signal_spanish_explicame(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        assert inst._FOLLOWUP_SIGNALS.search("Explícame más")
+
+    def test_no_signal_unrelated_short_questions(self):
+        # Independent short questions without referential language must NOT fire signals.
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        for q in [
+            "What are vowels?",
+            "Teach me numbers",
+            "¿Qué es el Dügü?",
+            "How do I say water in Garifuna?",
+            "What is Garifuna grammar?",
+        ]:
+            assert not inst._FOLLOWUP_SIGNALS.search(q), (
+                f"Short independent question incorrectly flagged as follow-up: {q!r}"
+            )
+
+    # ── Unit: _contextualize_query behavior ───────────────────────────────────
+
+    def test_no_enrichment_without_signals(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        messages = [
+            {"role": "user", "content": "Tell me about the Dügü ceremony"},
+            {"role": "assistant", "content": "The Dügü ceremony is an ancestral ritual..."},
+        ]
+        # Unrelated short question with no follow-up signals must pass through unchanged.
+        result = inst._contextualize_query("What are Garifuna vowels?", messages)
+        assert result == "What are Garifuna vowels?", (
+            f"Short unrelated question was incorrectly enriched: {result!r}"
+        )
+
+    def test_no_enrichment_empty_history(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        result = inst._contextualize_query("Háblame sobre eso", [])
+        assert result == "Háblame sobre eso"
+
+    def test_enrichment_uses_previous_user_query(self):
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        messages = [
+            {"role": "user", "content": "Tell me about the Dügü ceremony"},
+            {"role": "assistant", "content": "The Dügü ceremony is an ancestral ritual..."},
+        ]
+        result = inst._contextualize_query("Háblame sobre eso", messages)
+        # Must contain topic from the previous user query
+        assert "Dügü" in result or "ceremony" in result.lower(), (
+            f"Follow-up enrichment did not anchor on previous user query: {result!r}"
+        )
+        # Must NOT be just the original query unchanged
+        assert result != "Háblame sobre eso", (
+            f"Query was not enriched despite follow-up signal: {result!r}"
+        )
+
+    def test_enrichment_uses_user_query_not_ai_sentence(self):
+        # When a previous user query is available, the enrichment must use it
+        # rather than the AI opening sentence.
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        messages = [
+            {"role": "user", "content": "Tell me about Garifuna origins"},
+            {"role": "assistant", "content": "St. Vincent (Yurumein) is the ancestral homeland. Here the Garifuna formed..."},
+        ]
+        result = inst._contextualize_query("Tell me more", messages)
+        assert "Garifuna origins" in result or "Tell me about Garifuna origins" in result, (
+            f"Enrichment should use previous user query, not AI sentence: {result!r}"
+        )
+
+    def test_enrichment_most_recent_user_query_takes_precedence(self):
+        # In a multi-turn history, the MOST RECENT user query is the anchor.
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        inst = object.__new__(WorkflowNodes)
+        messages = [
+            {"role": "user", "content": "What is the Dügü ceremony?"},
+            {"role": "assistant", "content": "Dügü is a ceremony..."},
+            {"role": "user", "content": "Tell me about Gayunari"},
+            {"role": "assistant", "content": "Gayunari is the ceremonial house for Dügü..."},
+        ]
+        result = inst._contextualize_query("Tell me more about that", messages)
+        # Most recent user query was about Gayunari, not Dügü
+        assert "Gayunari" in result, (
+            f"Enrichment should anchor on most recent user query (Gayunari): {result!r}"
+        )
+
+    # ── Integration: multi-turn conversation advancement ──────────────────────
+
+    @requires_service
+    def test_followup_spanish_does_not_copy_first_response(self):
+        session_id = str(uuid.uuid4())
+        r1 = _ask_chat_with_session("¿De dónde vienen los garífuna?", session_id, lang="es")
+        assert r1, "First response must not be empty"
+        r2 = _ask_chat_with_session("Háblame sobre eso", session_id, lang="es")
+        assert r2, "Follow-up response must not be empty"
+        # Opening must differ — a verbatim repeat would start identically
+        assert r1[:100].strip() != r2[:100].strip(), (
+            f"Spanish follow-up appears to repeat first response verbatim.\n"
+            f"Turn 1 start: {r1[:150]!r}\nTurn 2 start: {r2[:150]!r}"
+        )
+        # Follow-up must still address the topic
+        assert re.search(
+            r"garifuna|garífuna|yurumein|st\.?\s*vincent|caribe|africa|centroam|honduras|belice",
+            r2, re.I,
+        ), f"Spanish follow-up does not address origins topic.\nResponse: {r2[:400]}"
+
+    @requires_service
+    def test_followup_english_advances_origins_topic(self):
+        session_id = str(uuid.uuid4())
+        r1 = _ask_chat_with_session("Where do the Garifuna people come from?", session_id)
+        assert r1
+        r2 = _ask_chat_with_session("Tell me more about that", session_id)
+        assert r2
+        assert r1[:80].strip() != r2[:80].strip(), (
+            f"English follow-up appears to repeat turn 1.\n"
+            f"Turn 1: {r1[:150]!r}\nTurn 2: {r2[:150]!r}"
+        )
+
+    @requires_service
+    def test_followup_van_sertima_advances_conversation(self):
+        # After asking about Van Sertima, a Spanish follow-up should deepen the topic,
+        # not loop back to the same opening.
+        session_id = str(uuid.uuid4())
+        r1 = _ask_chat_with_session(
+            "What do you know about Van Sertima's theory of African contact?", session_id
+        )
+        assert r1
+        r2 = _ask_chat_with_session("Dime más sobre eso", session_id, lang="es")
+        assert r2
+        assert r1[:80].strip() != r2[:80].strip(), (
+            f"Van Sertima follow-up appears to repeat turn 1.\n"
+            f"Turn 1: {r1[:150]!r}\nTurn 2: {r2[:150]!r}"
+        )
+
+    @requires_service
+    def test_unrelated_short_question_not_contaminated_by_prior_topic(self):
+        # After a ceremony discussion, an independent question about vowels must
+        # return vowel content — not ceremony content from follow-up enrichment.
+        session_id = str(uuid.uuid4())
+        _ask_chat_with_session("What is the Dügü ceremony?", session_id)
+        r2 = _ask_chat_with_session("What are Garifuna vowels?", session_id)
+        assert re.search(r"vowel|vocal|pronunci|a,\s*e,\s*i", r2, re.I), (
+            f"Independent vowel question returned unrelated content: {r2[:300]}"
+        )
+        assert re.search(r"[Ss]erie\s*I", r2), (
+            f"Independent vowel question did not cite Serie I: {r2[:300]}"
+        )
+
+
+# ─── PHASE 6: DICTIONARY ACCURACY AND DISPLAY NAMES ─────────────────────────
+
+class TestDictionaryAccuracyAndDisplayNames:
+    """
+    Tests for citation display name integrity and Garifuna dictionary accuracy.
+    No raw internal filenames or paths must reach the user.
+    """
+
+    # ── Unit: source display name fallback ────────────────────────────────────
+
+    def test_unknown_source_returns_document_not_path(self):
+        from app.services.chatbot.source_classifier import source_display_name
+        meta = {"source": "/var/www/RAG_pipeline/data/SOME_INTERNAL_FILE.pdf"}
+        result = source_display_name(meta)
+        assert ".pdf" not in result, f"Raw .pdf extension leaked: {result!r}"
+        assert "/var/" not in result and "RAG_pipeline" not in result, (
+            f"Internal path leaked into display name: {result!r}"
+        )
+
+    def test_unknown_source_fallback_is_document(self):
+        from app.services.chatbot.source_classifier import source_display_name
+        meta = {"source": "data/new_docs/UNKNOWN_DOC.pdf", "page_label": "5"}
+        result = source_display_name(meta)
+        assert "UNKNOWN_DOC" not in result, f"Raw filename in display: {result!r}"
+        assert "Document" in result, f"Expected 'Document' fallback, got: {result!r}"
+
+    def test_musical_instruments_has_readable_display(self):
+        from app.services.chatbot.source_classifier import classify_source
+        m = classify_source("data/new_docs/MUSICAL INSTRUMENTS Dataset.pdf")
+        assert m is not None, "Musical Instruments source not recognized by classifier"
+        assert ".pdf" not in m.display, f"Raw extension in display: {m.display!r}"
+        assert m.display != "MUSICAL INSTRUMENTS Dataset.pdf", (
+            f"Raw filename used as display name: {m.display!r}"
+        )
+        assert "Musical" in m.display or "Instrument" in m.display, (
+            f"Display name does not describe the source: {m.display!r}"
+        )
+
+    def test_known_sources_unaffected_by_fallback_change(self):
+        from app.services.chatbot.source_classifier import source_display_name
+        cases = [
+            ("data/LIBRO SERIE I.pdf", "21", "Libro Serie I"),
+            ("data/LIBRO GARIFUNA II FORMATO DIGITAL.pdf", "30", "Libro Garífuna II"),
+            ("data/DICCIONARIO GARIFUNA.pdf", "10", "Diccionario Garífuna"),
+        ]
+        for source_path, page_label, expected_display in cases:
+            meta = {"source": source_path, "page_label": page_label}
+            result = source_display_name(meta)
+            assert expected_display in result, (
+                f"Known source display broken for {source_path!r}: {result!r}"
+            )
+
+    # ── Unit: Markdown citation format ─────────────────────────────────────────
+
+    def test_citation_format_uses_em_dash_and_readable_name(self):
+        from app.services.chatbot.source_classifier import source_display_name
+        meta = {"source": "data/new_docs/LIBRO SERIE I.pdf", "page_label": "21"}
+        result = source_display_name(meta)
+        assert "Libro Serie I" in result, f"Display name missing: {result!r}"
+        assert "21" in result, f"Page number missing: {result!r}"
+        assert "—" in result, (
+            f"Em-dash missing from citation (Markdown bold format requires '—'): {result!r}"
+        )
+
+    # ── Integration: no raw filenames in LLM responses ────────────────────────
+
+    @requires_service
+    def test_no_pdf_extension_in_chat_response(self):
+        answer = _ask_chat("What are the Garifuna vowels?")
+        assert not re.search(r"\b\w+\.pdf\b", answer, re.I), (
+            f"Raw .pdf filename leaked into response: {answer[:400]}"
+        )
+
+    @requires_service
+    def test_no_internal_path_in_chat_response(self):
+        answer = _ask_chat("Tell me about Garifuna history")
+        assert not re.search(r"(?:RAG_pipeline|new_docs|/var/www|data/new_docs)", answer, re.I), (
+            f"Internal path leaked into response: {answer[:400]}"
+        )
+
+    # ── Integration: dictionary accuracy ──────────────────────────────────────
+
+    @requires_service
+    def test_father_has_documented_garifuna_forms(self):
+        # Diccionario Garífuna p.144 (SIGNIFICADO column): Baba, Tata, Úguchilin.
+        # At least one must appear, or the response must honestly acknowledge the gap.
+        answer = _ask_chat("What is the Garifuna word for father?")
+        has_documented_form = bool(re.search(
+            r"\bBaba\b|\bTata\b|\b[UÚ]guchilin\b|\b[UÚ]guchili\b",
+            answer, re.I,
+        ))
+        acknowledges_gap = bool(re.search(
+            r"not.*find|not.*available|not.*document|documents do not",
+            answer, re.I,
+        ))
+        assert has_documented_form or acknowledges_gap, (
+            f"Response neither provides documented form for 'father' "
+            f"(Baba/Tata/Úguchilin from Diccionario p.144) nor acknowledges gap.\n"
+            f"Response: {answer[:400]}"
+        )
+
+    @requires_service
+    def test_papa_not_presented_as_garifuna_word_for_father(self):
+        # "Papá" is the Spanish gloss column in the Diccionario, not a Garifuna form.
+        # If it appears, it must be explicitly framed as Spanish, not presented as
+        # a Garifuna translation.
+        answer = _ask_chat("What is the Garifuna word for father?")
+        for m in re.finditer(r"\bPap[aá]\b", answer, re.I):
+            start = max(0, m.start() - 120)
+            end = min(len(answer), m.end() + 120)
+            ctx = answer[start:end]
+            framed_as_spanish = bool(re.search(
+                r"spanish|español|gloss|not.*garifuna|only.*spanish|spanish.*translat",
+                ctx, re.I,
+            ))
+            framed_as_garifuna = bool(re.search(
+                r"garifuna\s+(?:word|form)|(?:in|en)\s+garifuna",
+                ctx, re.I,
+            ))
+            assert not framed_as_garifuna or framed_as_spanish, (
+                f"'Papá' presented as a Garifuna word without clarifying it is a "
+                f"Spanish gloss.\nContext: {ctx!r}\nFull: {answer[:400]}"
+            )

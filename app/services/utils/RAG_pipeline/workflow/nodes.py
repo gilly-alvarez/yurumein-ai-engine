@@ -125,23 +125,44 @@ class Nodes:
         return ""
 
     # Signals that a query is a contextual follow-up and needs topic enrichment.
+    # Includes English and Spanish referential terms and continuation phrases.
     _FOLLOWUP_SIGNALS = re.compile(
         r"\b(they|them|their|theirs|it\b|its\b|this|that|these|those|he|she|him|her"
-        r"|tell\s+me\s+more|more\s+about|what\s+happened|and\s+(?:what|where|when|how|why))\b",
+        r"|tell\s+me\s+more|more\s+about|what\s+happened|and\s+(?:what|where|when|how|why)"
+        r"|eso|esto|ese|esa|esos|esas|ello|ellos|ellas"
+        r"|h[aá]blame|cu[eé]ntame|dime\s+m[aá]s|m[aá]s\s+sobre|expl[ií]came)\b",
         re.IGNORECASE,
     )
 
     def _contextualize_query(self, query: str, messages: list[dict]) -> str:
         """
-        Prepend the opening sentence of the last assistant reply to short or
-        pronoun-bearing follow-up queries so retrieval surfaces documents relevant
-        to the ongoing topic rather than the decontextualised phrase alone.
+        When a query contains genuine follow-up signals, prepend the previous user
+        query as the topic anchor so retrieval surfaces the same document neighborhood.
+
+        Gated strictly on follow-up signals — short questions without referential
+        language are left unchanged to avoid contaminating unrelated queries with
+        a prior topic.
+
+        Anchor strategy: use the previous user/human query (most reliable — it
+        contains the original topic in the user's own retrieval-friendly language).
+        Falls back to the last assistant reply, stripped of markdown noise, only
+        when no prior user query is available.
         """
         if not messages:
             return query
-        # Only enrich short queries or those with referential language.
-        if len(query.split()) > 12 and not self._FOLLOWUP_SIGNALS.search(query):
+        # Only enrich when genuine follow-up signals are present.
+        # Do NOT enrich based on query length alone.
+        if not self._FOLLOWUP_SIGNALS.search(query):
             return query
+
+        # Primary: use the last user/human query in history as topic anchor.
+        for msg in reversed(messages):
+            if msg.get("role") in ("user", "human"):
+                content = (msg.get("content") or "").strip()
+                if content and len(content.split()) >= 3:
+                    return f"{content[:200]} {query}"
+
+        # Fallback: last assistant reply, stripped of citation/markdown noise.
         last_ai = None
         for msg in reversed(messages):
             if msg.get("role") in ("assistant", "ai"):
@@ -149,11 +170,12 @@ class Nodes:
                 break
         if not last_ai:
             return query
-        first_sentence = re.split(r"(?<=[.!?])\s+", last_ai)[0].strip()
-        # Skip prefixes that are too short or are markdown/citation artefacts.
-        if len(first_sentence) < 20 or first_sentence.startswith(("**", "[", "Source:")):
+        clean = re.sub(r"\*\*Source:.*", "", last_ai, flags=re.IGNORECASE | re.DOTALL)
+        clean = re.sub(r"\[(?:Source|EID)[^\]]*\]", "", clean)
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean) if len(s.strip()) >= 20]
+        if not sentences or sentences[0].startswith(("**", "[")):
             return query
-        return f"{first_sentence[:120]} {query}"
+        return f"{sentences[0][:150]} {query}"
 
     def _keyword_overlap_score(self, query: str, text: str) -> float:
         query_terms = {

@@ -60,6 +60,15 @@ _ROLE_MAP: list[tuple[str, SourceMeta]] = [
         ),
     ),
     (
+        "MUSICAL INSTRUMENTS",
+        SourceMeta(
+            role="SUPPLEMENTARY",
+            display="Garífuna Musical Instruments",
+            priority=5,
+            attribution="",
+        ),
+    ),
+    (
         "GARIFUNA LANGUAGE OVERVIEW",
         SourceMeta(
             role="SUPPLEMENTARY",
@@ -89,7 +98,7 @@ def source_display_name(metadata: dict) -> str:
     page_raw = metadata.get("page")
 
     meta = classify_source(source_path)
-    display = meta.display if meta else source_path.rsplit("/", 1)[-1]
+    display = meta.display if meta else "Document"
 
     if page_label is not None:
         return f"{display} — page {page_label}"

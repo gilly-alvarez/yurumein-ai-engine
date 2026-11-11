@@ -5,7 +5,7 @@ This is the FastAPI/Python AI service for Yurumein AI, a platform dedicated to p
 ## Hard Rules
 
 - Do not deploy without explicit owner approval.
-- Do not touch the production VPS, nginx, PM2, or Docker configuration.
+- Do not touch the production VPS, nginx, PM2, or Docker configuration — except for the following deployment operations when the owner explicitly says "deploy on the VPS": `git pull`, `docker compose build`, and `docker compose up -d`. No other VPS commands are permitted without explicit instruction.
 - Do not expose, print, or commit secrets, tokens, or credentials.
 - Do not create or commit real `.env` files (use `.env.example` for documentation only).
 - Preserve current architecture.
@@ -42,5 +42,5 @@ Never commit `.env` — it is protected by `.gitignore`.
 Yurumein AI exists to preserve Garífuna language and cultural heritage. This context is load-bearing — not a footnote.
 
 - Do not generate, alter, or approve Garífuna vocabulary, grammar, or cultural content without RAG grounding or explicit owner review.
-- The `DICCIONARIO GARIFUNA.pdf` in `data/new_docs/` is the primary cultural source. Treat it as authoritative.
+- `DICCIONARIO GARIFUNA.pdf` (`data/new_docs/`) is Yurumein's primary available Spanish → Garífuna lexical source (registry: Tier A lexical, Tier B overall). It is not an English source. For broader authority decisions — including what constitutes source-backed vs. Yurumein-derived content — see `app/services/utils/RAG_pipeline/registry/source_registry.yaml`.
 - Linguistic accuracy in Garífuna is mission-critical. A wrong translation or lesson is not a minor bug — it can cause lasting cultural harm.
