@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # Set to a strong random string in production. Requests without this key
     # receive 403 Forbidden. Leave empty only in local dev (endpoints return 503).
     ADMIN_API_KEY: str = ""
+    # Required for session-mutation endpoints (rename, pin, archive, delete).
+    # Passed server-side by the Next.js proxy only — never from the browser.
+    # Leave empty only in local dev (endpoints return 503 when unset).
+    SESSION_API_KEY: str = ""
     class Config:
         env_file = ".env"
 

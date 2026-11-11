@@ -1,7 +1,7 @@
 from typing import List, Dict, Optional
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy import Column, String, DateTime, Integer, Text, delete, update
+from sqlalchemy import Column, String, DateTime, Integer, Text, Boolean, delete, update
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.future import select
 from langchain_core.messages import HumanMessage, AIMessage
@@ -20,6 +20,9 @@ class ChatSessionModel(Base):
     session_id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False, index=True)
     title = Column(String, nullable=False)
+
+    pinned = Column(Boolean, nullable=False, default=False, server_default="false")
+    archived = Column(Boolean, nullable=False, default=False, server_default="false")
 
     created_at = Column(
         DateTime(timezone=False),
@@ -270,13 +273,17 @@ class SessionManager:
                 return []
 
     async def get_user_sessions(self, user_id: str) -> List[Dict]:
-        """Get all sessions for a user"""
+        """Get all sessions for a user (pinned first, then by updated_at desc)."""
         async with self.AsyncSessionLocal() as session:
             try:
+                from sqlalchemy import desc, nullslast
                 sessions_stmt = (
                     select(ChatSessionModel)
                     .filter_by(user_id=user_id.strip())
-                    .order_by(ChatSessionModel.updated_at.desc())
+                    .order_by(
+                        ChatSessionModel.pinned.desc(),
+                        ChatSessionModel.updated_at.desc(),
+                    )
                 )
                 sessions_result = await session.execute(sessions_stmt)
                 sessions = sessions_result.scalars().all()
@@ -285,6 +292,8 @@ class SessionManager:
                     {
                         "session_id": s.session_id,
                         "title": s.title,
+                        "pinned": bool(s.pinned),
+                        "archived": bool(s.archived),
                         "created_at": (
                             s.created_at.isoformat() if s.created_at else None
                         ),
@@ -306,32 +315,123 @@ class SessionManager:
         return await self.get_user_sessions(user_id)
 
     async def delete_session(self, session_id: str, user_id: str):
-        """Delete a session and all its messages"""
+        """Delete a session and all its messages.
 
+        Ownership is verified before any rows are deleted.
+        Both deletes are committed atomically — if either fails, neither is applied.
+        Raises ValueError when the session does not exist or belongs to a different user.
+        """
         async with self.AsyncSessionLocal() as session:
-
             try:
-
-                # Delete messages first
-
-                delete_messages_result = await session.execute(
-                    delete(ChatMessageModel).where(
-                        ChatMessageModel.session_id == session_id
-                    )
-                )
-                delete_session_result = await session.execute(
-                    delete(ChatSessionModel).where(
+                # 1. Confirm ownership before touching any rows.
+                result = await session.execute(
+                    select(ChatSessionModel).where(
                         ChatSessionModel.session_id == session_id,
                         ChatSessionModel.user_id == user_id,
                     )
                 )
+                chat_session = result.scalars().first()
+                if chat_session is None:
+                    raise ValueError(
+                        f"Session {session_id!r} not found or not owned by user"
+                    )
+                # 2. Delete messages.
+                await session.execute(
+                    delete(ChatMessageModel).where(
+                        ChatMessageModel.session_id == session_id
+                    )
+                )
+                # 3. Delete the session object.
+                await session.delete(chat_session)
+                # 4. Commit both deletions atomically.
                 await session.commit()
                 print(f"✓ Deleted session: {session_id}")
-            except Exception as e:
-
+            except ValueError:
                 await session.rollback()
-
+                raise
+            except Exception as e:
+                await session.rollback()
                 raise Exception(f"Failed to delete session: {str(e)}")
+
+    async def rename_session(self, session_id: str, user_id: str, title: str) -> None:
+        """Rename a session title. Raises ValueError if not owned by user."""
+        title = title.strip()
+        if not title:
+            raise ValueError("Title cannot be empty")
+        async with self.AsyncSessionLocal() as session:
+            try:
+                result = await session.execute(
+                    select(ChatSessionModel).where(
+                        ChatSessionModel.session_id == session_id,
+                        ChatSessionModel.user_id == user_id,
+                    )
+                )
+                chat_session = result.scalars().first()
+                if chat_session is None:
+                    raise ValueError(
+                        f"Session {session_id!r} not found or not owned by user"
+                    )
+                chat_session.title = title
+                await session.commit()
+                print(f"✓ Renamed session {session_id} → {title!r}")
+            except ValueError:
+                await session.rollback()
+                raise
+            except Exception as e:
+                await session.rollback()
+                raise Exception(f"Failed to rename session: {str(e)}")
+
+    async def pin_session(self, session_id: str, user_id: str, pinned: bool) -> None:
+        """Pin or unpin a session. Raises ValueError if not owned by user."""
+        async with self.AsyncSessionLocal() as session:
+            try:
+                result = await session.execute(
+                    select(ChatSessionModel).where(
+                        ChatSessionModel.session_id == session_id,
+                        ChatSessionModel.user_id == user_id,
+                    )
+                )
+                chat_session = result.scalars().first()
+                if chat_session is None:
+                    raise ValueError(
+                        f"Session {session_id!r} not found or not owned by user"
+                    )
+                chat_session.pinned = pinned
+                await session.commit()
+                print(f"✓ {'Pinned' if pinned else 'Unpinned'} session {session_id}")
+            except ValueError:
+                await session.rollback()
+                raise
+            except Exception as e:
+                await session.rollback()
+                raise Exception(f"Failed to pin/unpin session: {str(e)}")
+
+    async def archive_session(self, session_id: str, user_id: str, archived: bool) -> None:
+        """Archive or unarchive a session. Raises ValueError if not owned by user."""
+        async with self.AsyncSessionLocal() as session:
+            try:
+                result = await session.execute(
+                    select(ChatSessionModel).where(
+                        ChatSessionModel.session_id == session_id,
+                        ChatSessionModel.user_id == user_id,
+                    )
+                )
+                chat_session = result.scalars().first()
+                if chat_session is None:
+                    raise ValueError(
+                        f"Session {session_id!r} not found or not owned by user"
+                    )
+                chat_session.archived = archived
+                if archived:
+                    chat_session.pinned = False  # archived sessions cannot stay pinned
+                await session.commit()
+                print(f"✓ {'Archived' if archived else 'Unarchived'} session {session_id}")
+            except ValueError:
+                await session.rollback()
+                raise
+            except Exception as e:
+                await session.rollback()
+                raise Exception(f"Failed to archive/unarchive session: {str(e)}")
 
     async def close(self):
         """Close database connections properly"""

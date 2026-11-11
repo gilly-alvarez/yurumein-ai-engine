@@ -2,8 +2,9 @@
 import os
 import shutil
 from pathlib import Path
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Depends, Security, status
 from fastapi.responses import StreamingResponse
+from fastapi.security import APIKeyHeader
 from typing import Annotated, Optional, List, AsyncGenerator
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
@@ -15,8 +16,34 @@ from ..utils.RAG_pipeline.DB.session_manager import SessionManager
 from ..utils.RAG_pipeline.DB.knowledge_gap_manager import get_gap_manager
 from ..utils.RAG_pipeline.vectore_db.pgvector_db import upload_docs_pipeline, VectorStoreManager
 from ..chatbot.chatbot_schema import ChatbotResponse,ChatHistoryResponse,ChatSessionResponse,RetrievalCheckResponse,HybridRetrievalCheckResponse
+from ...core.config import settings
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Session-mutation authentication
+# ---------------------------------------------------------------------------
+_session_key_header = APIKeyHeader(name="X-Session-Key", auto_error=False)
+
+
+async def require_session_key(key: Optional[str] = Security(_session_key_header)) -> None:
+    """Require X-Session-Key on session-mutation endpoints.
+
+    Passed server-side by the Next.js proxy — never from the browser.
+    Returns 503 when SESSION_API_KEY is not configured (fail-secure default).
+    Returns 403 for any missing or incorrect key.
+    """
+    configured = settings.SESSION_API_KEY
+    if not configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Session API key not configured on this server.",
+        )
+    if not key or key != configured:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden.",
+        )
 
 _GAP_PHRASES = (
     # English
@@ -334,18 +361,71 @@ async def get_session_history(
         raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
 
 
-@router.delete('/session/{session_id}')
+@router.delete('/session/{session_id}', dependencies=[Depends(require_session_key)])
 async def delete_session(
     session_id: str,
     user_id: str,
     session_manager: SessionManager = Depends(get_session_manager)
 ):
-    """Delete a chat session"""
+    """Delete a chat session. Returns 404 if the session does not exist or belongs to a different user."""
     try:
         await session_manager.delete_session(session_id, user_id)
         return {"message": "Session deleted successfully", "session_id": session_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
+
+
+@router.patch('/session/{session_id}/rename', dependencies=[Depends(require_session_key)])
+async def rename_session(
+    session_id: str,
+    user_id: str,
+    title: str,
+    session_manager: SessionManager = Depends(get_session_manager)
+):
+    """Rename a chat session. Returns 404 if not owned by user."""
+    try:
+        await session_manager.rename_session(session_id, user_id, title)
+        return {"message": "Session renamed", "session_id": session_id, "title": title.strip()}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to rename session: {str(e)}")
+
+
+@router.patch('/session/{session_id}/pin', dependencies=[Depends(require_session_key)])
+async def pin_session(
+    session_id: str,
+    user_id: str,
+    pinned: bool,
+    session_manager: SessionManager = Depends(get_session_manager)
+):
+    """Pin or unpin a chat session. Returns 404 if not owned by user."""
+    try:
+        await session_manager.pin_session(session_id, user_id, pinned)
+        return {"message": "Session updated", "session_id": session_id, "pinned": pinned}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to pin session: {str(e)}")
+
+
+@router.patch('/session/{session_id}/archive', dependencies=[Depends(require_session_key)])
+async def archive_session(
+    session_id: str,
+    user_id: str,
+    archived: bool,
+    session_manager: SessionManager = Depends(get_session_manager)
+):
+    """Archive or unarchive a chat session. Returns 404 if not owned by user."""
+    try:
+        await session_manager.archive_session(session_id, user_id, archived)
+        return {"message": "Session updated", "session_id": session_id, "archived": archived}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to archive session: {str(e)}")
 
 
 @router.post('/upload_docs')

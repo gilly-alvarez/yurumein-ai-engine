@@ -10,6 +10,8 @@ class ChatbotResponse(BaseModel):
 class ChatSessionResponse(BaseModel):
     session_id: str
     title: str
+    pinned: bool = False
+    archived: bool = False
     created_at: Optional[str]
     updated_at: Optional[str]
 
