@@ -12,8 +12,17 @@
 -- IDEMPOTENT: safe to run multiple times. CREATE TABLE IF NOT EXISTS and
 -- CREATE INDEX IF NOT EXISTS will no-op if already applied.
 --
--- ROLLBACK (run only if you need to undo this migration before any data exists):
---   DROP TABLE IF EXISTS knowledge_gaps;
+-- ROLLBACK STRATEGY:
+--   Application rollback: revert the application code to the previous version
+--   (git checkout c7894f4 on the engine). The knowledge_gaps table is NOT dropped.
+--   The old application code simply does not reference the table, so it is safe
+--   to leave it in place. Data accumulated during the Phase 1 deployment is
+--   preserved for later review.
+--
+--   Schema rollback (only if the table must be removed — e.g., before any data
+--   has been accumulated, or upon explicit owner instruction):
+--     DROP TABLE IF EXISTS knowledge_gaps;
+--   This is irreversible. Confirm there are no records to preserve before running.
 --
 -- PRIVACY NOTES:
 --   - This table stores normalized question topics only (stop-word stripped,

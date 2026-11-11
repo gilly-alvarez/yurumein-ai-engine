@@ -5,6 +5,11 @@ from sqlalchemy import Column, String, DateTime, Integer, Text, func
 from sqlalchemy.future import select
 from .session_manager import Base, SessionManager
 
+# Patterns removed before normalization to avoid storing identifiable tokens.
+_EMAIL_RE = re.compile(r"\S+@\S+\.\S+")
+_PHONE_RE = re.compile(r"\b\d[\d\s\-().]{6,}\d\b")
+_LONG_DIGIT_RE = re.compile(r"\b\d{5,}\b")
+
 
 _STOP_WORDS = frozenset({
     "the", "a", "an", "in", "on", "to", "for", "of", "and", "or", "but",
@@ -94,8 +99,21 @@ class KnowledgeGapManager:
 
     @staticmethod
     def normalize(question: str) -> str:
-        """Lowercase, strip punctuation, remove stop words. Stores topic only — no PII."""
+        """Lowercase, strip PII patterns and punctuation, remove stop words.
+
+        PII scrubbing applied before tokenization:
+        - Email addresses (token containing @)
+        - Phone-like digit sequences (7+ digit runs with spaces/dashes/parens)
+        - Long standalone digit strings (5+ digits, e.g. IDs, zip codes)
+
+        What remains is topic keywords only — no names, emails, or identifiers
+        are actively filtered (names are common words that remain). The admin
+        review queue should not be treated as a verbatim conversation log.
+        """
         q = question.lower()
+        q = _EMAIL_RE.sub(" ", q)
+        q = _PHONE_RE.sub(" ", q)
+        q = _LONG_DIGIT_RE.sub(" ", q)
         q = re.sub(r"[^\w\s]", " ", q)
         words = [w for w in q.split() if w and w not in _STOP_WORDS and len(w) > 1]
         return " ".join(words[:30])
@@ -137,16 +155,21 @@ class KnowledgeGapManager:
     async def record_gap(self, question: str, flag_reason: str) -> None:
         """Upsert a knowledge gap signal. Never stores PII — only normalized topic words.
 
+        `frequency` counts detection events (chat signals), NOT unique users.
+        No user or session identifiers are stored, so per-user counting is not
+        possible. High frequency indicates the topic is asked often; it does not
+        mean many different people asked it.
+
+        24-hour cooldown: frequency increments at most once per 24-hour window
+        per normalized topic. This dampens rapid-fire repetition from any single
+        session but does not enforce strict per-user limits.
+
         Deduplication: Jaccard word-overlap >= 0.5 on normalized questions.
         Cross-language note: Spanish/English dedup is approximate. If the same
         concept is asked in both languages with shared roots (e.g. "garifuna"),
         they will often deduplicate. Fully non-overlapping phrasings may create
         separate entries — this is a known Phase 1 limitation; no extra LLM call
         is used to avoid adding latency per user message.
-
-        Frequency cooldown: frequency increments at most once every 24 hours
-        per normalized topic. This prevents a single user from inflating community
-        demand signals by asking the same question repeatedly.
         """
         try:
             normalized = self.normalize(question)
@@ -287,9 +310,14 @@ class KnowledgeGapManager:
                 "generated_at": now.isoformat(),
                 "period_days": 7,
                 "new_this_week": new_this_week,
+                "frequency_note": (
+                    "frequency counts detection events (chat signals), not unique users. "
+                    "No user identifiers are stored. High frequency means the topic "
+                    "triggered gap signals often; it does not confirm distinct users."
+                ),
                 "status_breakdown": {r[0]: r[1] for r in status_rows},
                 "flag_reason_breakdown": {r[0]: r[1] for r in reason_rows},
-                "top_topics": [{"topic": r[0], "frequency": int(r[1])} for r in top_topics],
+                "top_topics": [{"topic": r[0], "detection_events": int(r[1])} for r in top_topics],
                 "top_unresolved_gaps": [_gap_to_dict(g) for g in top_gaps_rows],
             }
 
