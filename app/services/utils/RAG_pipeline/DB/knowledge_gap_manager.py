@@ -3,7 +3,13 @@ from datetime import datetime, timezone, timedelta
 import re
 from sqlalchemy import Column, String, DateTime, Integer, Text, func
 from sqlalchemy.future import select
-from .session_manager import Base, SessionManager
+from sqlalchemy.orm import declarative_base
+from .session_manager import SessionManager
+
+# Separate Base so KnowledgeGapModel is NOT included in DBManager.create_tables()
+# (which calls Base.metadata.create_all on the session Base). The knowledge_gaps
+# table is created only by running migrations/001_create_knowledge_gaps.sql explicitly.
+GapBase = declarative_base()
 
 # Patterns removed before normalization to avoid storing identifiable tokens.
 _EMAIL_RE = re.compile(r"\S+@\S+\.\S+")
@@ -57,7 +63,7 @@ VALID_FLAG_REASONS = frozenset(
 )
 
 
-class KnowledgeGapModel(Base):
+class KnowledgeGapModel(GapBase):
     __tablename__ = "knowledge_gaps"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -70,6 +76,13 @@ class KnowledgeGapModel(Base):
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
     last_seen = Column(
+        DateTime(timezone=False),
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    # Tracks when frequency was last incremented — used for the 24h cooldown check.
+    # Kept separate from last_seen so last_seen always reflects the actual most
+    # recent occurrence regardless of whether the cooldown window was open.
+    last_incremented = Column(
         DateTime(timezone=False),
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
@@ -157,12 +170,14 @@ class KnowledgeGapManager:
 
         `frequency` counts detection events (chat signals), NOT unique users.
         No user or session identifiers are stored, so per-user counting is not
-        possible. High frequency indicates the topic is asked often; it does not
-        mean many different people asked it.
+        possible. High frequency indicates the topic triggered gap signals often;
+        it does not confirm distinct users or questions.
 
         24-hour cooldown: frequency increments at most once per 24-hour window
-        per normalized topic. This dampens rapid-fire repetition from any single
-        session but does not enforce strict per-user limits.
+        per normalized topic (anchored to `last_incremented`, not `last_seen`).
+        `last_seen` is always updated to the actual most recent occurrence so the
+        queue shows real recency. This prevents rapid repeated signals from
+        inflating frequency while preserving accurate recency information.
 
         Deduplication: Jaccard word-overlap >= 0.5 on normalized questions.
         Cross-language note: Spanish/English dedup is approximate. If the same
@@ -181,10 +196,15 @@ class KnowledgeGapManager:
             async with self._sm.AsyncSessionLocal() as db:
                 existing = await self._find_similar(normalized, db)
                 if existing:
-                    # Rate-limit frequency: at most one increment per 24-hour window.
-                    hours_since_last = (now - existing.last_seen).total_seconds() / 3600
-                    if hours_since_last >= 24:
+                    # Cooldown anchored to last_incremented (not last_seen) so that
+                    # frequent occurrences within the window don't reset the clock
+                    # and permanently prevent frequency from growing.
+                    anchor = existing.last_incremented or existing.last_seen or now
+                    hours_since_increment = (now - anchor).total_seconds() / 3600
+                    if hours_since_increment >= 24:
                         existing.frequency += 1
+                        existing.last_incremented = now
+                    # Always update last_seen to reflect the actual most recent occurrence
                     existing.last_seen = now
                     # Escalate reason if a stronger signal arrives for the same topic
                     if (flag_reason == "citation_rejected"
@@ -322,8 +342,10 @@ class KnowledgeGapManager:
             }
 
     async def create_tables(self) -> None:
+        """Available for local dev / test setup. Not called in production startup.
+        Production table creation uses migrations/001_create_knowledge_gaps.sql."""
         async with self._sm.async_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(GapBase.metadata.create_all)
         print("Knowledge gap table created/verified")
 
 

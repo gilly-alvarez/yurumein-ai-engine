@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
     flag_reason     VARCHAR(50)   NOT NULL,
     first_seen      TIMESTAMP WITHOUT TIME ZONE,
     last_seen       TIMESTAMP WITHOUT TIME ZONE,
+    -- Cooldown anchor: when frequency was last incremented.
+    -- Kept separate from last_seen so last_seen always reflects the actual
+    -- most recent occurrence without resetting the 24-hour increment window.
+    last_incremented TIMESTAMP WITHOUT TIME ZONE,
     status          VARCHAR(30)   NOT NULL DEFAULT 'needs_review',
     admin_notes     TEXT,
     source_reference TEXT

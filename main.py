@@ -8,11 +8,9 @@ from app.services.chatbot.cahtbot_router import router as chatbot_router
 from app.services.knowledge_gaps.knowledge_gap_router import router as knowledge_gap_router
 from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import VectorStoreManager
 from app.services.utils.RAG_pipeline.DB.session_manager import SessionManager
-from app.services.utils.RAG_pipeline.DB.knowledge_gap_manager import KnowledgeGapManager
 
 store = VectorStoreManager()
 DBManager = SessionManager()
-GapManager = KnowledgeGapManager()
 app = FastAPI(title="Yurumein AI",version="0.1.0")
 
 app.add_middleware(
@@ -47,11 +45,11 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database tables on startup"""
+    """Initialize session/chat tables on startup.
+    knowledge_gaps is NOT auto-created here — apply migrations/001_create_knowledge_gaps.sql
+    before deploying this version."""
     try:
-        #await store.upload_docs_pipeline()
         await DBManager.create_tables()
-        await GapManager.create_tables()
         print("Database tables initialized on startup")
     except Exception as e:
         print(f"Warning: Database initialization failed: {e}")

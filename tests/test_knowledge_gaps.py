@@ -380,84 +380,96 @@ class TestAdminAuth:
 
 
 # ---------------------------------------------------------------------------
-# 7. Frequency cooldown — single-user inflation prevention
+# 7. Frequency cooldown — anchored to last_incremented, not last_seen
 # ---------------------------------------------------------------------------
 
+def _make_gap(now, last_incremented_offset_h, last_seen_offset_h=None):
+    """Helper: build a mock KnowledgeGapModel with the given time offsets."""
+    from app.services.utils.RAG_pipeline.DB.knowledge_gap_manager import KnowledgeGapModel
+    from unittest.mock import MagicMock
+    from datetime import timedelta
+    gap = MagicMock(spec=KnowledgeGapModel)
+    gap.normalized_question = "garifuna language origin"
+    gap.frequency = 2
+    gap.flag_reason = "no_retrieved_docs"
+    gap.status = "needs_review"
+    gap.last_incremented = now - timedelta(hours=last_incremented_offset_h)
+    gap.last_seen = now - timedelta(hours=(last_seen_offset_h or last_incremented_offset_h))
+    return gap
+
+
+async def _run_record_gap(gap):
+    """Helper: run record_gap against a mocked DB returning the given gap."""
+    from app.services.utils.RAG_pipeline.DB.knowledge_gap_manager import KnowledgeGapManager
+    from unittest.mock import AsyncMock, MagicMock, patch
+    with patch("app.services.utils.RAG_pipeline.DB.knowledge_gap_manager.SessionManager"):
+        mgr = KnowledgeGapManager()
+    mgr._find_similar = AsyncMock(return_value=gap)
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+    mock_db.commit = AsyncMock()
+    mgr._sm = MagicMock()
+    mgr._sm.AsyncSessionLocal = MagicMock(return_value=mock_db)
+    await mgr.record_gap(question="garifuna language origin", flag_reason="no_retrieved_docs")
+    return gap
+
+
 class TestFrequencyCooldown:
-    """Verify that the 24-hour cooldown prevents single-user count inflation."""
+    """Verify 24-hour cooldown anchored to last_incremented (not last_seen)."""
 
-    async def test_same_question_within_24h_does_not_increment(self):
-        from app.services.utils.RAG_pipeline.DB.knowledge_gap_manager import (
-            KnowledgeGapModel, KnowledgeGapManager,
-        )
-        from datetime import datetime, timezone, timedelta
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        # Simulate an existing gap seen 1 hour ago
-        recent_gap = MagicMock(spec=KnowledgeGapModel)
-        recent_gap.normalized_question = "garifuna language origin"
-        recent_gap.frequency = 2
-        recent_gap.flag_reason = "no_retrieved_docs"
-        recent_gap.status = "needs_review"
+    async def test_within_24h_of_last_incremented_does_not_increment(self):
+        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        recent_gap.last_seen = now - timedelta(hours=1)  # 1 hour ago
+        gap = _make_gap(now, last_incremented_offset_h=1)  # incremented 1h ago
+        await _run_record_gap(gap)
+        assert gap.frequency == 2  # unchanged
 
-        with patch(
-            "app.services.utils.RAG_pipeline.DB.knowledge_gap_manager.SessionManager"
-        ):
-            mgr = KnowledgeGapManager()
-
-        # Patch _find_similar to return the recent gap
-        mgr._find_similar = AsyncMock(return_value=recent_gap)
-
-        # Patch the DB session context manager
-        mock_db = AsyncMock()
-        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_db.__aexit__ = AsyncMock(return_value=False)
-        mock_db.commit = AsyncMock()
-        mgr._sm = MagicMock()
-        mgr._sm.AsyncSessionLocal = MagicMock(return_value=mock_db)
-
-        await mgr.record_gap(
-            question="garifuna language origin",
-            flag_reason="no_retrieved_docs",
-        )
-
-        # Frequency must NOT have been incremented (within 24h)
-        assert recent_gap.frequency == 2
-
-    async def test_same_question_after_24h_increments(self):
-        from app.services.utils.RAG_pipeline.DB.knowledge_gap_manager import (
-            KnowledgeGapModel, KnowledgeGapManager,
-        )
-        from datetime import datetime, timezone, timedelta
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        old_gap = MagicMock(spec=KnowledgeGapModel)
-        old_gap.normalized_question = "garifuna language origin"
-        old_gap.frequency = 2
-        old_gap.flag_reason = "no_retrieved_docs"
-        old_gap.status = "needs_review"
+    async def test_after_24h_of_last_incremented_increments(self):
+        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        old_gap.last_seen = now - timedelta(hours=25)  # 25 hours ago
+        gap = _make_gap(now, last_incremented_offset_h=25)  # incremented 25h ago
+        await _run_record_gap(gap)
+        assert gap.frequency == 3  # incremented
 
-        with patch(
-            "app.services.utils.RAG_pipeline.DB.knowledge_gap_manager.SessionManager"
-        ):
-            mgr = KnowledgeGapManager()
+    async def test_last_seen_always_updated_regardless_of_cooldown(self):
+        """last_seen must reflect actual recency even when frequency is not incremented."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        gap = _make_gap(now, last_incremented_offset_h=1, last_seen_offset_h=1)
+        original_last_seen = gap.last_seen
+        result = await _run_record_gap(gap)
+        # last_seen updated even though cooldown blocked frequency increment
+        assert result.last_seen != original_last_seen
 
-        mgr._find_similar = AsyncMock(return_value=old_gap)
-        mock_db = AsyncMock()
-        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_db.__aexit__ = AsyncMock(return_value=False)
-        mock_db.commit = AsyncMock()
-        mgr._sm = MagicMock()
-        mgr._sm.AsyncSessionLocal = MagicMock(return_value=mock_db)
+    async def test_frequent_activity_cannot_indefinitely_block_increment(self):
+        """The original bug: last_seen was used as cooldown anchor, so frequent
+        activity (every 23h) could reset the window and prevent frequency growth.
+        With last_incremented as anchor, the question still increments after 24h
+        even if last_seen was updated repeatedly."""
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        from app.services.utils.RAG_pipeline.DB.knowledge_gap_manager import KnowledgeGapModel
+        from unittest.mock import MagicMock
+        gap = MagicMock(spec=KnowledgeGapModel)
+        gap.normalized_question = "garifuna language origin"
+        gap.frequency = 2
+        gap.flag_reason = "no_retrieved_docs"
+        gap.status = "needs_review"
+        # last_incremented is 25 hours ago — cooldown window is open
+        gap.last_incremented = now - timedelta(hours=25)
+        # last_seen is only 1 hour ago — simulates frequent activity updating last_seen
+        gap.last_seen = now - timedelta(hours=1)
+        result = await _run_record_gap(gap)
+        # Must increment because last_incremented > 24h ago, regardless of last_seen
+        assert result.frequency == 3
 
-        await mgr.record_gap(
-            question="garifuna language origin",
-            flag_reason="no_retrieved_docs",
-        )
-
-        # Frequency MUST have been incremented (past 24h window)
-        assert old_gap.frequency == 3
+    async def test_last_incremented_updated_when_frequency_increments(self):
+        """When an increment fires, last_incremented must be set to now."""
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        gap = _make_gap(now, last_incremented_offset_h=25)
+        result = await _run_record_gap(gap)
+        assert result.frequency == 3
+        # last_incremented must have been reset (no longer 25h ago)
+        assert (now - result.last_incremented).total_seconds() < 5
