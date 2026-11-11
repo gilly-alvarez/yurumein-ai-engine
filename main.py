@@ -5,11 +5,14 @@ from app.services.translater.translater_router import router as translater_route
 #from app.services.text_to_speech.text_to_speech_router import router as text_to_speech_router
 from app.services.learning_hub.learning_hub_router import router as learning_hub_router
 from app.services.chatbot.cahtbot_router import router as chatbot_router
+from app.services.knowledge_gaps.knowledge_gap_router import router as knowledge_gap_router
 from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import VectorStoreManager
 from app.services.utils.RAG_pipeline.DB.session_manager import SessionManager
+from app.services.utils.RAG_pipeline.DB.knowledge_gap_manager import KnowledgeGapManager
 
 store = VectorStoreManager()
 DBManager = SessionManager()
+GapManager = KnowledgeGapManager()
 app = FastAPI(title="Yurumein AI",version="0.1.0")
 
 app.add_middleware(
@@ -23,6 +26,7 @@ app.add_middleware(
 app.include_router(translater_router,tags=["Translation"])
 app.include_router(learning_hub_router,tags=['learning hub'])
 app.include_router(chatbot_router ,tags=['chatbot'])
+app.include_router(knowledge_gap_router)
 #app.include_router(text_to_speech_router ,tags=["text_to_speech"])
 
 @app.get("/",tags = ["health"])
@@ -43,13 +47,14 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize vector store on startup"""
+    """Initialize database tables on startup"""
     try:
         #await store.upload_docs_pipeline()
         await DBManager.create_tables()
-        print("Vector store initialized on startup")
+        await GapManager.create_tables()
+        print("Database tables initialized on startup")
     except Exception as e:
-        print(f"Warning: Vector store initialization failed: {e}")
+        print(f"Warning: Database initialization failed: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(

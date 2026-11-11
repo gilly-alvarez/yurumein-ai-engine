@@ -1,8 +1,8 @@
 
 import os
 import shutil
-from pathlib import Path 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from pathlib import Path
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import StreamingResponse
 from typing import Annotated, Optional, List, AsyncGenerator
 from pydantic import BaseModel
@@ -12,11 +12,61 @@ import uuid
 import asyncio
 from ..utils.RAG_pipeline.workflow.workflow import create_workflow, run_workflow
 from ..utils.RAG_pipeline.DB.session_manager import SessionManager
+from ..utils.RAG_pipeline.DB.knowledge_gap_manager import get_gap_manager
 from ..utils.RAG_pipeline.vectore_db.pgvector_db import upload_docs_pipeline, VectorStoreManager
 from ..chatbot.chatbot_schema import ChatbotResponse,ChatHistoryResponse,ChatSessionResponse,RetrievalCheckResponse,HybridRetrievalCheckResponse
 
 router = APIRouter()
 
+_GAP_PHRASES = (
+    "do not have information", "don't have information",
+    "not available in", "not documented", "no documentation",
+    "no information available", "unable to find", "cannot find",
+    "no encuentro información", "no tengo información",
+    "no está documentado", "sin información",
+)
+
+
+async def _detect_and_record_gap(
+    user_prompt: str,
+    response_text: str,
+    retrieved_docs: list,
+    context: str,
+    citations_stripped: int,
+) -> None:
+    """Background task: detect knowledge gap signals and persist if found.
+
+    Stores only normalized topic words — no PII, no session ID, no raw query.
+    Does not modify any existing knowledge, lexicon, or verified content.
+    """
+    try:
+        is_lexicon_hit = "<LEXICON_CONTEXT>" in (context or "")
+        no_docs = len(retrieved_docs) == 0 and not is_lexicon_hit
+
+        low_evidence = False
+        if 0 < len(retrieved_docs) <= 2:
+            scores = [d.get("hybrid_score", 0.0) for d in retrieved_docs]
+            if max(scores, default=0.0) < 0.3:
+                low_evidence = True
+
+        citation_rejected = citations_stripped > 0
+        gap_acknowledged = any(p in response_text.lower() for p in _GAP_PHRASES)
+
+        if not any([no_docs, low_evidence, citation_rejected, gap_acknowledged]):
+            return
+
+        if citation_rejected:
+            flag_reason = "citation_rejected"
+        elif no_docs:
+            flag_reason = "no_retrieved_docs"
+        elif low_evidence:
+            flag_reason = "low_evidence"
+        else:
+            flag_reason = "gap_acknowledged"
+
+        await get_gap_manager().record_gap(question=user_prompt, flag_reason=flag_reason)
+    except Exception as e:
+        print(f"[knowledge-gap] detection error: {e}")
 
 
 async def get_session_manager() -> SessionManager:
@@ -52,7 +102,8 @@ async def chat_stream(
             "messages": [],
             "response": None,
             "retrieved_docs": None,
-            "next_node": None
+            "next_node": None,
+            "citations_stripped": 0,
         }
 
         config = {
@@ -64,6 +115,10 @@ async def chat_stream(
 
         async def generate() -> AsyncGenerator[str, None]:
             full_response = ""
+            # Capture gap-detection data from workflow events
+            _gap_retrieved_docs: list = []
+            _gap_context: str = ""
+            _gap_citations_stripped: int = 0
 
             try:
                 yield f"data: {json.dumps({'type': 'session', 'session_id': session_id, 'is_new': is_new_session})}\n\n"
@@ -71,14 +126,21 @@ async def chat_stream(
                 workflow, node_instance = create_workflow()
 
                 async for event in workflow.astream(state, config=config):
+                    # Capture retrieval state from whichever retrieval node fires
+                    for _rnode in ("global_retrieval_process", "file_process"):
+                        if _rnode in event:
+                            _n = event[_rnode]
+                            _gap_retrieved_docs = _n.get("retrieved_docs") or []
+                            _gap_context = _n.get("context") or ""
                     if "llm_call" in event:
                         llm_output = event["llm_call"]
                         response_text = llm_output.get("response", "")
+                        _gap_citations_stripped = llm_output.get("citations_stripped") or 0
 
                         for char in response_text:
                             full_response += char
                             yield f"data: {json.dumps({'type': 'token', 'content': char})}\n\n"
-                            await asyncio.sleep(0.01)  
+                            await asyncio.sleep(0.01)
 
                 await session_manager.save_message(
                     session_id=session_id,
@@ -103,6 +165,15 @@ async def chat_stream(
                     content=full_response
                 )
 
+                # Fire gap detection as a background task — never blocks streaming response
+                asyncio.create_task(_detect_and_record_gap(
+                    user_prompt=user_prompt,
+                    response_text=full_response,
+                    retrieved_docs=_gap_retrieved_docs,
+                    context=_gap_context,
+                    citations_stripped=_gap_citations_stripped,
+                ))
+
             except Exception as e:
                 error_msg = f"Error during chat processing: {str(e)}"
                 print(error_msg)
@@ -126,6 +197,7 @@ async def chat_stream(
 
 @router.post('/chat', response_model=ChatbotResponse)
 async def chat_simple(
+    background_tasks: BackgroundTasks,
     user_prompt: Annotated[str, Form()],
     user_id: Annotated[str, Form()],
     session_id: Annotated[Optional[str], Form()] = None,
@@ -155,10 +227,23 @@ async def chat_simple(
             "retrieved_docs": None,
             "next_node": None,
             "language": language,
+            "citations_stripped": 0,
         }
         result = await run_workflow(state)
         response_text = result.get("response", "")
+        retrieved_docs = result.get("retrieved_docs") or []
+        context = result.get("context") or ""
+        citations_stripped = result.get("citations_stripped") or 0
         print(response_text)
+
+        background_tasks.add_task(
+            _detect_and_record_gap,
+            user_prompt=user_prompt,
+            response_text=response_text,
+            retrieved_docs=retrieved_docs,
+            context=context,
+            citations_stripped=citations_stripped,
+        )
         await session_manager.save_message(
             session_id=session_id,
             role="user",

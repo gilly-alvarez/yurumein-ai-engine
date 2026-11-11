@@ -574,7 +574,9 @@ class Nodes:
             return [parts[0].strip(), parts[1].strip()]
         return [query]
 
-    def _validate_citations(self, response: str, retrieved_docs: list[dict]) -> str:
+    def _validate_citations_with_count(
+        self, response: str, retrieved_docs: list[dict]
+    ) -> tuple[str, int]:
         """
         Post-generate validation of every **Source:**/**Fuente:** and
         [Source: ...]/[Fuente: ...] citation (English and Spanish).
@@ -606,8 +608,11 @@ class Nodes:
 
         [UNVERIFIED: ...] placeholders are stripped unconditionally so that
         technical validation markers never reach users.
+
+        Returns (cleaned_text, stripped_citation_count).
         """
         result = response
+        _stripped = [0]  # mutable counter accessible to closures
 
         # Build lookup: book_display_lower → {page_label_str, ...}
         # When retrieved_docs is empty the lookup is also empty — all book citations
@@ -647,6 +652,7 @@ class Nodes:
             reason = "no_retrieved_docs" if not retrieved_docs else "not_in_retrieved_set"
             for r in invalid:
                 print(f"[citation-validator] stripped | claim={r!r} | reason={reason}")
+                _stripped[0] += 1
             if not valid:
                 return ""
             new_claim = "; ".join(valid)
@@ -658,6 +664,7 @@ class Nodes:
             reason = "no_retrieved_docs" if not retrieved_docs else "not_in_retrieved_set"
             for r in invalid:
                 print(f"[citation-validator] stripped | claim={r!r} | reason={reason}")
+                _stripped[0] += 1
             if not valid:
                 return ""
             new_claim = "; ".join(valid)
@@ -684,7 +691,12 @@ class Nodes:
         result = re.sub(r"[ \t]*\[UNVERIFIED:[^\]]*\][ \t]*\n?", "", result, flags=re.IGNORECASE)
         # Collapse blank lines left after citation removal.
         result = re.sub(r"\n{3,}", "\n\n", result)
-        return result.strip()
+        return result.strip(), _stripped[0]
+
+    def _validate_citations(self, response: str, retrieved_docs: list[dict]) -> str:
+        """Thin wrapper — returns only the cleaned text. Tests use this signature."""
+        cleaned, _ = self._validate_citations_with_count(response, retrieved_docs)
+        return cleaned
 
     async def decide_retrieval_path(self, state: ChatState) -> dict:
         if state.get("file"):
@@ -1040,10 +1052,10 @@ class Nodes:
                 query=user_query,
             )
             response = await self.llm.ainvoke(prompt)
-            validated = self._validate_citations(
+            validated, citations_stripped = self._validate_citations_with_count(
                 response.content, state.get("retrieved_docs") or []
             )
-            return {"response": validated}
+            return {"response": validated, "citations_stripped": citations_stripped}
         except Exception as e:
             print(f"LLM call error: {e}")
             return {"response": f"Error generating response: {str(e)}"}
