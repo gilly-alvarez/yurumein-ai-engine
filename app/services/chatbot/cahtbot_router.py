@@ -19,11 +19,19 @@ from ..chatbot.chatbot_schema import ChatbotResponse,ChatHistoryResponse,ChatSes
 router = APIRouter()
 
 _GAP_PHRASES = (
+    # English
     "do not have information", "don't have information",
+    "do not provide information",
     "not available in", "not documented", "no documentation",
     "no information available", "unable to find", "cannot find",
+    # Spanish — original
     "no encuentro información", "no tengo información",
     "no está documentado", "sin información",
+    # Spanish — observed in production responses
+    "no proporcionan información",
+    "no proporciona información",
+    "no documentan",
+    "no hay información",
 )
 
 
