@@ -400,10 +400,18 @@ class Nodes:
             meta = classify_source(source_path)
             abbrev = self._EID_ABBREV.get(meta.role, "DOC") if meta else "DOC"
             eid = f"EID-{index}:{abbrev}:p{page_label}" if page_label else f"EID-{index}:{abbrev}"
-            parts.append(
-                f"[{eid} | Source: {source_citation} | Retrieval: {retrieval_source}]\n"
-                f"{doc.get('page_content', '')}"
-            )
+            if meta:
+                parts.append(
+                    f"[{eid} | Source: {source_citation} | Retrieval: {retrieval_source}]\n"
+                    f"{doc.get('page_content', '')}"
+                )
+            else:
+                # Unknown source: omit the Source label so the LLM has no citable
+                # name to reproduce. Content is still provided for factual grounding.
+                parts.append(
+                    f"[{eid} | Retrieval: {retrieval_source}]\n"
+                    f"{doc.get('page_content', '')}"
+                )
         return "\n\n".join(parts)
 
     def _build_lexicon_miss_context(self, term: str, language: str) -> str:
@@ -568,49 +576,83 @@ class Nodes:
 
     def _validate_citations(self, response: str, retrieved_docs: list[dict]) -> str:
         """
-        Post-generate validation of every **Source:** and [Source: ...] citation.
+        Post-generate validation of every **Source:**/**Fuente:** and
+        [Source: ...]/[Fuente: ...] citation (English and Spanish).
 
-        Builds an exact lookup of (book_display_lower → {page_label}) from retrieved_docs,
-        then checks every citation in the response against that set. Citations that cannot
-        be verified — wrong book, wrong page, or book not retrieved at all — are replaced
-        in-place with [UNVERIFIED: ...] so they are never presented as confirmed sources.
+        Builds an exact lookup of (book_display_lower → {page_label}) from the
+        retrieved_docs for this turn, then checks every citation in the response
+        against that set. A citation is removed when:
+          - the named book was not retrieved in this turn, OR
+          - a specific page number is cited but that page was not in the retrieved set.
+
+        Note: "not in the retrieved set" is NOT equivalent to "does not exist in the
+        book." A page may exist in the source document without having been retrieved
+        or without that page's content supporting the specific claim being made.
+
+        Removed citations are logged internally. Their absence from the user-facing
+        response does not validate the underlying historical assertion — it only means
+        the citation could not be confirmed against the retrieved evidence for this turn.
+
+        [UNVERIFIED: ...] placeholders are stripped unconditionally so that
+        technical validation markers never reach users.
         """
-        if not retrieved_docs:
-            return response
+        result = response
 
-        # Build lookup: book_display_lower → {page_label_str, ...}
-        retrieved_pages: dict[str, set[str]] = {}
-        for doc in retrieved_docs:
-            sm = classify_source((doc.get("metadata") or {}).get("source", ""))
-            if sm:
-                page = str((doc.get("metadata") or {}).get("page_label", "") or "")
-                retrieved_pages.setdefault(sm.display.lower(), set()).add(page)
+        if retrieved_docs:
+            # Build lookup: book_display_lower → {page_label_str, ...}
+            retrieved_pages: dict[str, set[str]] = {}
+            for doc in retrieved_docs:
+                sm = classify_source((doc.get("metadata") or {}).get("source", ""))
+                if sm:
+                    page = str((doc.get("metadata") or {}).get("page_label", "") or "")
+                    retrieved_pages.setdefault(sm.display.lower(), set()).add(page)
 
-        def _claim_valid(claim: str) -> bool:
-            claim_l = claim.strip().lower()
-            matched_book = next((b for b in retrieved_pages if b in claim_l), None)
-            if not matched_book:
-                return False
-            claimed_pages = re.findall(r"\b(\d+)\b", claim_l)
-            if not claimed_pages:
-                return True  # book-level citation, no page demanded — accept
-            return any(p in retrieved_pages[matched_book] for p in claimed_pages)
+            def _claim_valid(claim: str) -> bool:
+                claim_l = claim.strip().lower()
+                matched_book = next((b for b in retrieved_pages if b in claim_l), None)
+                if not matched_book:
+                    return False
+                claimed_pages = re.findall(r"\b(\d+)\b", claim_l)
+                if not claimed_pages:
+                    return True  # book-level citation, no page demanded — accept
+                return any(p in retrieved_pages[matched_book] for p in claimed_pages)
 
-        def _fix_bold(m: re.Match) -> str:
-            claim = m.group(1).strip()
-            if _claim_valid(claim):
-                return m.group(0)
-            return f"**Source:** [UNVERIFIED: {claim}]"
+            def _fix_bold(m: re.Match) -> str:
+                claim = m.group(1).strip()
+                if _claim_valid(claim):
+                    return m.group(0)
+                print(f"[citation-validator] stripped | claim={claim!r} | reason=not_in_retrieved_set")
+                return ""
 
-        def _fix_bracket(m: re.Match) -> str:
-            claim = m.group(1).strip()
-            if _claim_valid(claim):
-                return m.group(0)
-            return f"[UNVERIFIED: {claim}]"
+            def _fix_bracket(m: re.Match) -> str:
+                claim = m.group(1).strip()
+                if _claim_valid(claim):
+                    return m.group(0)
+                print(f"[citation-validator] stripped | claim={claim!r} | reason=not_in_retrieved_set")
+                return ""
 
-        result = re.sub(r"\*\*Source:\*\*\s*([^\n*]+)", _fix_bold, response, flags=re.IGNORECASE)
-        result = re.sub(r"\[Source:\s*([^\]]+)\]", _fix_bracket, result, flags=re.IGNORECASE)
-        return result
+            # Validate bold citations: **Source:** and **Fuente:** (Spanish)
+            result = re.sub(
+                r"\*\*(?:Source|Fuente):\*\*\s*([^\n*]+)",
+                _fix_bold, result, flags=re.IGNORECASE,
+            )
+            # Validate bracket citations: [Source: ...] and [Fuente: ...]
+            result = re.sub(
+                r"\[(?:Source|Fuente):\s*([^\]]+)\]",
+                _fix_bracket, result, flags=re.IGNORECASE,
+            )
+
+        # Always strip any remaining [UNVERIFIED: ...] placeholders — these must
+        # never reach users regardless of how they arrived in the string.
+        # Their removal is not a statement about the correctness of the surrounding text.
+        result = re.sub(
+            r"[ \t]*\*\*(?:Source|Fuente):\*\*[ \t]*\[UNVERIFIED:[^\]]*\][ \t]*\n?",
+            "", result, flags=re.IGNORECASE,
+        )
+        result = re.sub(r"[ \t]*\[UNVERIFIED:[^\]]*\][ \t]*\n?", "", result, flags=re.IGNORECASE)
+        # Collapse blank lines left after citation removal.
+        result = re.sub(r"\n{3,}", "\n\n", result)
+        return result.strip()
 
     async def decide_retrieval_path(self, state: ChatState) -> dict:
         if state.get("file"):

@@ -846,17 +846,20 @@ class TestPhase2Retrieval:
         result = inst._validate_citations("**Source:** Libro Serie I — page 21", retrieved_docs)
         assert "[UNVERIFIED" not in result, f"Valid citation was incorrectly marked: {result}"
 
-        # Correct book + wrong page → UNVERIFIED
+        # Correct book + wrong page → citation stripped (not shown as UNVERIFIED)
         result = inst._validate_citations("**Source:** Libro Serie I — page 99", retrieved_docs)
-        assert "[UNVERIFIED" in result, f"Wrong page not flagged: {result}"
+        assert "page 99" not in result, f"Wrong page citation not stripped: {result}"
+        assert "[UNVERIFIED" not in result, f"UNVERIFIED placeholder must not reach users: {result}"
 
-        # Wrong book entirely → UNVERIFIED
+        # Wrong book entirely → citation stripped
         result = inst._validate_citations("**Source:** Libro Garífuna II — page 21", retrieved_docs)
-        assert "[UNVERIFIED" in result, f"Wrong book not flagged: {result}"
+        assert "Libro Garífuna II" not in result, f"Wrong book citation not stripped: {result}"
+        assert "[UNVERIFIED" not in result, f"UNVERIFIED placeholder must not reach users: {result}"
 
-        # [Source: ...] bracket format, wrong page → UNVERIFIED
+        # [Source: ...] bracket format, wrong page → stripped
         result = inst._validate_citations("[Source: Libro Serie I — page 99]", retrieved_docs)
-        assert "[UNVERIFIED" in result, f"Bracket format not checked: {result}"
+        assert "page 99" not in result, f"Bracket format wrong page not stripped: {result}"
+        assert "[UNVERIFIED" not in result, f"UNVERIFIED placeholder must not reach users: {result}"
 
         # [Source: ...] bracket format, correct page → unchanged
         result = inst._validate_citations("[Source: Libro Serie I — page 21]", retrieved_docs)
@@ -1651,3 +1654,221 @@ class TestDictionaryAccuracyAndDisplayNames:
                 f"'Papá' presented as a Garifuna word without clarifying it is a "
                 f"Spanish gloss.\nContext: {ctx!r}\nFull: {answer[:400]}"
             )
+
+
+# ─── Citation Integrity ───────────────────────────────────────────────────────
+
+class TestCitationIntegrity:
+    """
+    Unit tests for _validate_citations and _build_context.
+
+    All tests are pure-unit: no live service, no DB, no LLM calls.
+
+    Design notes matching implementation requirements:
+      - Safeguard 1: validation checks the *retrieved set for this turn*, not
+        whether a page exists in the book. A page may exist without having been
+        retrieved or without its content supporting the specific claim.
+      - Safeguard 2: both English (**Source:**) and Spanish (**Fuente:**) citation
+        formats — including bracketed variants — are validated and cleaned.
+      - Safeguard 3: stripping a citation from the user-facing response does not
+        mean the surrounding historical claim is validated. The claim text is
+        preserved; only the unverifiable citation line is removed. Rejections are
+        logged internally.
+    """
+
+    @staticmethod
+    def _nodes():
+        from app.services.utils.RAG_pipeline.workflow.nodes import Nodes as WorkflowNodes
+        return object.__new__(WorkflowNodes)
+
+    # ── Safeguard 1: validation checks the retrieved set, not page existence ──
+
+    def test_citation_to_page_not_in_retrieved_set_is_stripped(self):
+        """
+        A citation whose page number was not retrieved this turn is stripped.
+        This does NOT assert the page is nonexistent in the book — only that
+        it was not part of the evidence retrieved for this specific turn.
+        """
+        inst = self._nodes()
+        # Only pages 43 and 174 were retrieved; page 199 may or may not exist
+        # but it was not in this turn's evidence pool.
+        docs = [
+            {"metadata": {"source": "DICCIONARIO GARIFUNA.pdf", "page_label": "43"}, "page_content": "x"},
+            {"metadata": {"source": "DICCIONARIO GARIFUNA.pdf", "page_label": "174"}, "page_content": "x"},
+        ]
+        resp = "Some historical claim.\n**Source:** Diccionario Garífuna — page 199"
+        result = inst._validate_citations(resp, docs)
+        assert "page 199" not in result, (
+            "Citation to a page not in the retrieved set must be stripped. "
+            "Note: this test says nothing about whether page 199 exists in the book."
+        )
+        assert "[UNVERIFIED:" not in result
+
+    def test_citation_to_retrieved_page_is_kept(self):
+        """A citation whose exact page was retrieved this turn is preserved."""
+        inst = self._nodes()
+        docs = [
+            {"metadata": {"source": "DICCIONARIO GARIFUNA.pdf", "page_label": "43"}, "page_content": "x"},
+        ]
+        resp = "Dügü ceremony house.\n**Source:** Diccionario Garífuna — page 43"
+        result = inst._validate_citations(resp, docs)
+        assert "Diccionario Garífuna — page 43" in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_book_level_citation_without_page_is_kept(self):
+        """A citation naming only the book (no page number) is accepted when the book was retrieved."""
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO SERIE I.pdf", "page_label": "4"}, "page_content": "x"}]
+        resp = "Six vowels exist.\n**Source:** Libro Serie I"
+        result = inst._validate_citations(resp, docs)
+        assert "Libro Serie I" in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_citation_to_book_not_retrieved_at_all_is_stripped(self):
+        """A citation to a book that wasn't retrieved this turn is stripped regardless of page."""
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO SERIE I.pdf", "page_label": "4"}, "page_content": "x"}]
+        resp = "Some claim.\n**Source:** Libro Garífuna II — page 5"
+        result = inst._validate_citations(resp, docs)
+        assert "Libro Garífuna II" not in result
+        assert "[UNVERIFIED:" not in result
+
+    # ── Safeguard 2: bilingual citation format support ────────────────────────
+
+    def test_fuente_bold_valid_citation_preserved(self):
+        """**Fuente:** citations with a retrieved page are kept (Spanish response format)."""
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO SERIE I.pdf", "page_label": "4"}, "page_content": "x"}]
+        resp = "El idioma tiene seis vocales.\n**Fuente:** Libro Serie I — página 4"
+        result = inst._validate_citations(resp, docs)
+        assert "Libro Serie I" in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_fuente_bold_invalid_citation_stripped(self):
+        """**Fuente:** citations to a page not in the retrieved set are stripped."""
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO SERIE I.pdf", "page_label": "4"}, "page_content": "x"}]
+        resp = "Alguna afirmación histórica.\n**Fuente:** Libro Serie I — página 999"
+        result = inst._validate_citations(resp, docs)
+        assert "página 999" not in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_fuente_bracket_citation_stripped_when_invalid(self):
+        """[Fuente: ...] bracket format is validated the same as [Source: ...]."""
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO GARIFUNA II FORMATO DIGITAL.pdf", "page_label": "5"}, "page_content": "x"}]
+        resp = "Alguna afirmación. [Fuente: Libro Garífuna II — página 99]"
+        result = inst._validate_citations(resp, docs)
+        assert "página 99" not in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_source_english_and_fuente_spanish_in_same_response(self):
+        """Both **Source:** and **Fuente:** in one response are each independently validated."""
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO SERIE I.pdf", "page_label": "4"}, "page_content": "x"}]
+        # One valid (page 4 retrieved), one invalid (page 99 not retrieved, different book)
+        resp = (
+            "English section.\n**Source:** Libro Serie I — page 4\n"
+            "Spanish section.\n**Fuente:** Libro Garífuna II — página 99"
+        )
+        result = inst._validate_citations(resp, docs)
+        assert "Libro Serie I — page 4" in result
+        assert "página 99" not in result
+        assert "[UNVERIFIED:" not in result
+
+    # ── Safeguard 3: internal record preserved; claim text survives ───────────
+
+    def test_stripped_citation_preserves_surrounding_claim_text(self):
+        """
+        Stripping a citation removes only the **Source:** line.
+        The historical claim in the paragraph must be preserved — removing
+        the citation is not a judgment about the correctness of the assertion.
+        """
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "DICCIONARIO GARIFUNA.pdf", "page_label": "43"}, "page_content": "x"}]
+        claim = "Van Sertima argued for pre-Columbian African contact with Mesoamerica."
+        resp = f"{claim}\n**Source:** Diccionario Garífuna — page 199"
+        result = inst._validate_citations(resp, docs)
+        assert claim in result, (
+            "The surrounding historical claim must survive citation stripping. "
+            "Removing an unverifiable citation line is not the same as removing the assertion."
+        )
+        assert "page 199" not in result
+        assert "[UNVERIFIED:" not in result
+
+    def test_stripped_citation_logged_internally(self, capsys):
+        """
+        When a citation is stripped, the rejection must be recorded internally
+        (stdout log) so it can be audited. Silent removal would make citation
+        problems undetectable in production logs.
+        """
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "DICCIONARIO GARIFUNA.pdf", "page_label": "43"}, "page_content": "x"}]
+        resp = "Some claim.\n**Source:** Diccionario Garífuna — page 199"
+        inst._validate_citations(resp, docs)
+        captured = capsys.readouterr()
+        assert "citation-validator" in captured.out, (
+            "Stripped citations must be logged via [citation-validator] prefix. "
+            f"Actual stdout: {captured.out!r}"
+        )
+
+    # ── Fix A: unknown-source EID suppresses Source label ────────────────────
+
+    def test_unknown_source_eid_has_no_source_label(self):
+        """
+        Chunks with unrecognized source paths must not expose 'Source: Document'
+        in the EID header. Without a citable name, the LLM cannot fabricate
+        a 'Document' citation.
+        """
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "/data/unrecognized_file.pdf", "page_label": "7"}, "page_content": "some content"}]
+        ctx = inst._build_context(docs)
+        assert "Source: Document" not in ctx, (
+            f"'Source: Document' must not appear in EID for unknown-source chunks.\nContext: {ctx!r}"
+        )
+        assert "some content" in ctx, "Content must still be included for factual grounding."
+
+    def test_known_source_eid_still_has_source_label(self):
+        """EID for recognized sources must still include the Source label."""
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO SERIE I/page4.txt", "page_label": "4"}, "page_content": "vowels"}]
+        ctx = inst._build_context(docs)
+        assert "Source: Libro Serie I" in ctx
+
+    def test_document_citation_stripped_when_source_unrecognized(self):
+        """
+        If the LLM cites 'Document' (the fallback display name for unknown sources),
+        that citation is stripped by _validate_citations since 'Document' is not
+        in the retrieved_pages lookup (classify_source returns None for unknown paths).
+        """
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "/data/unknown.pdf", "page_label": "7"}, "page_content": "x"}]
+        resp = "Some background claim.\n**Source:** Document — page 7"
+        result = inst._validate_citations(resp, docs)
+        assert "[UNVERIFIED:" not in result
+        assert "Document" not in result
+
+    # ── UNVERIFIED placeholder never reaches users ────────────────────────────
+
+    def test_unverified_placeholder_never_reaches_user(self):
+        """
+        [UNVERIFIED: ...] must never appear in a user-facing response under any
+        code path — including when retrieved_docs is non-empty and validation runs.
+        """
+        inst = self._nodes()
+        docs = [{"metadata": {"source": "LIBRO SERIE I.pdf", "page_label": "5"}, "page_content": "x"}]
+        resp = "Six vowels.\n**Source:** Libro Serie I — page 999"
+        result = inst._validate_citations(resp, docs)
+        assert "[UNVERIFIED:" not in result
+
+    def test_unverified_placeholder_stripped_even_when_already_present(self):
+        """
+        If [UNVERIFIED: ...] text arrives in the response string (e.g., from an
+        old session stored in chat history), the final strip pass removes it.
+        """
+        inst = self._nodes()
+        # Pass empty retrieved_docs so the validation block is skipped — only
+        # the unconditional strip pass runs.
+        resp = "Some claim.\n**Source:** [UNVERIFIED: Diccionario Garífuna — page 199]"
+        result = inst._validate_citations(resp, [])
+        assert "[UNVERIFIED:" not in result

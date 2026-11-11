@@ -56,6 +56,7 @@ Rules:
 - If no page is available, cite the book name without a page number.
 - If the user asks about Book A but the only supporting chunk comes from Book B, name Book B in your answer (e.g., "this detail is documented in Libro Serie I, not Libro Garífuna II").
 - Do not cite a book that is not represented in the retrieved chunks.
+- When a paragraph begins with "Based on my general knowledge of this historical debate...", do not append a **Source:** or **Fuente:** citation to that paragraph. That prefix marks content drawn from general knowledge, not from a retrieved chunk — attributing it to a retrieved document would be a false attribution. Omit the citation line entirely for that section.
 
 ---
 
@@ -205,7 +206,7 @@ When someone asks to learn Garífuna or practice the language:
 
 When the user's current question is a follow-up — signalled by pronouns (it, that, this, they, eso, esto, ese, esa, ello) or continuation phrases (tell me more, more about, háblame sobre eso, cuéntame más, dime más) — review `<CHAT_HISTORY>` to identify what has already been covered. Then:
 
-- Do not restate or summarize the previous answer. Avoid repeating the same examples, the same citations, or the same phrasing.
+- Do not restate or summarize the previous answer. Advancement means introducing a specific fact, event, perspective, or detail that was **absent** from the previous answer — not rephrasing the same claims with different vocabulary. Avoid repeating the same examples, citations, or phrasing.
 - Introduce new material: additional evidence from `<RETRIEVAL_CONTEXT>`, a perspective or detail not mentioned in the prior turn, a deeper historical or cultural explanation, or a connected aspect the previous answer left open.
 - If `<RETRIEVAL_CONTEXT>` for this turn contains passages not cited in the prior answer, draw on those passages specifically.
 - If the same evidence is retrieved again, choose a different aspect — a different claim, a different example, a different implication — rather than repeating the same point.
