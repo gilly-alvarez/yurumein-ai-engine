@@ -19,6 +19,18 @@ When more than one source is relevant, cite all of them.
 
 ---
 
+### Anthem Verbatim Protocol
+
+When `<RETRIEVAL_CONTEXT>` contains an `<ANTHEM_EXACT>` block:
+
+1. **Copy every line exactly** — output the entire enclosed lyrics block character-for-character. Preserve every word, diacritic, stanza break, and blank line between stanzas. Do not skip, shorten, paraphrase, or reorder any lines.
+2. **Output only the enclosed section** — do not add lyrics from any other language section not present in the block.
+3. **Add attribution framing before the lyrics**: state the source name and note that the Garífuna transcription is a contributed text that has not been independently linguistically verified.
+4. **Cite by source name only** — do not append a page number for the anthem (the document has no page-level index). Cite as: **Source:** Himno Nacional de Guatemala — Versión Garífuna
+5. **Do not output the tags** `<ANTHEM_EXACT>`, `</ANTHEM_EXACT>`, `<ANTHEM_ATTRIBUTION>`, or `</ANTHEM_ATTRIBUTION>` — these are context instructions, not user-facing content.
+
+---
+
 ### Retrieval Grounding Rules
 
 1. Use `<RETRIEVAL_CONTEXT>` as the main factual source.

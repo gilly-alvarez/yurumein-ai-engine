@@ -62,6 +62,7 @@ requires_service = pytest.mark.skipif(
 # ─── UNIT: intent_router ────────────────────────────────────────────────────
 
 from app.services.chatbot.intent_router import detect_intent, Intent
+from app.services.utils.RAG_pipeline.workflow.nodes import Nodes
 
 
 class TestAnthemIntentDetection:
@@ -129,6 +130,162 @@ class TestAnthemSourceClassifier:
     def test_unrecognized_path_returns_none(self):
         assert classify_source("random_file.pdf") is None
 
+    def test_national_anthem_has_attribution(self):
+        path = "/data/new_docs/Himno_Nacional_Guatemala_Garifuna.docx"
+        meta = classify_source(path)
+        assert meta is not None
+        assert meta.attribution != "", "NATIONAL_ANTHEM must have an attribution string"
+        assert "verified" in meta.attribution.lower()
+
+
+# ─── UNIT: anthem language detection ────────────────────────────────────────
+
+_nodes = Nodes.__new__(Nodes)  # instantiate without connecting to DB
+
+
+class TestAnthemLanguageDetection:
+    def test_default_is_garifuna(self):
+        assert _nodes._detect_anthem_language("What is the national anthem?") == "garifuna"
+
+    def test_explicit_garifuna(self):
+        assert _nodes._detect_anthem_language("show me the anthem in Garífuna") == "garifuna"
+
+    def test_spanish_keyword(self):
+        assert _nodes._detect_anthem_language("show me the Spanish version") == "spanish"
+
+    def test_español_keyword(self):
+        assert _nodes._detect_anthem_language("¿cuál es el himno en español?") == "spanish"
+
+    def test_english_keyword(self):
+        assert _nodes._detect_anthem_language("English lyrics please") == "english"
+
+    def test_mixed_query_spanish_wins(self):
+        # When both English and Spanish appear, the first match (Spanish pattern) wins
+        result = _nodes._detect_anthem_language("translate anthem from Spanish to English")
+        assert result in ("spanish", "english")  # either is acceptable; not "garifuna"
+
+    def test_garifuna_is_default_for_bare_anthem_query(self):
+        assert _nodes._detect_anthem_language("Guatemala national anthem") == "garifuna"
+
+
+# ─── UNIT: section filtering ─────────────────────────────────────────────────
+
+def _make_chunk(text: str, idx: int) -> dict:
+    return {"page_content": text, "metadata": {"chunk_index": idx}}
+
+
+class TestAnthemSectionFilter:
+    _MOCK_CHUNKS = [
+        _make_chunk("Himno Nacional de Guatemala", 0),
+        _make_chunk("Garífuna", 1),                           # section header
+        _make_chunk("Wadimalu gundati lau bareini", 2),
+        _make_chunk("Wadimalu liubani le seremei", 3),
+        _make_chunk("Wadimalu biri le moweidibei", 4),         # final line
+        _make_chunk("Español", 5),                             # section header
+        _make_chunk("¡Guatemala feliz! que tus aras", 6),
+        _make_chunk("English", 7),                             # section header
+        _make_chunk("Happy Guatemala! may your altars", 8),
+    ]
+
+    def test_garifuna_section_excludes_first_line_check(self):
+        section = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "garifuna")
+        texts = [c["page_content"] for c in section]
+        assert "Wadimalu gundati lau bareini" in texts
+
+    def test_garifuna_section_includes_final_line(self):
+        section = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "garifuna")
+        texts = [c["page_content"] for c in section]
+        assert "Wadimalu biri le moweidibei" in texts, (
+            f"Final line missing from Garífuna section. Got: {texts}"
+        )
+
+    def test_garifuna_section_excludes_spanish(self):
+        section = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "garifuna")
+        texts = [c["page_content"] for c in section]
+        assert not any("Guatemala feliz" in t for t in texts), (
+            "Garífuna section must not contain Spanish lyrics"
+        )
+
+    def test_spanish_section_contains_spanish_lyrics(self):
+        section = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "spanish")
+        texts = [c["page_content"] for c in section]
+        assert any("Guatemala feliz" in t for t in texts)
+
+    def test_spanish_section_excludes_garifuna(self):
+        section = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "spanish")
+        texts = [c["page_content"] for c in section]
+        assert not any("Wadimalu" in t for t in texts)
+
+    def test_english_section_contains_english_lyrics(self):
+        section = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "english")
+        texts = [c["page_content"] for c in section]
+        assert any("Happy Guatemala" in t for t in texts)
+
+    def test_no_headers_returns_all_chunks(self):
+        bare_chunks = [
+            _make_chunk("Wadimalu gundati lau bareini", 0),
+            _make_chunk("Wadimalu biri le moweidibei", 1),
+        ]
+        result = _nodes._filter_anthem_section(bare_chunks, "garifuna")
+        assert result == bare_chunks
+
+    def test_missing_language_returns_all_chunks(self):
+        # Request a section that has no header in the document
+        result = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "french")
+        assert result == self._MOCK_CHUNKS
+
+    def test_garifuna_section_preserves_order(self):
+        section = _nodes._filter_anthem_section(self._MOCK_CHUNKS, "garifuna")
+        texts = [c["page_content"] for c in section]
+        first_idx = texts.index("Wadimalu gundati lau bareini")
+        last_idx = texts.index("Wadimalu biri le moweidibei")
+        assert first_idx < last_idx, "First line must precede final line in filtered section"
+
+
+# ─── UNIT: anthem context builder ────────────────────────────────────────────
+
+class TestBuildAnthemContext:
+    _CHUNKS = [
+        _make_chunk("Wadimalu gundati lau bareini", 0),
+        _make_chunk("Wadimalu liubani le seremei", 1),
+        _make_chunk("Wadimalu biri le moweidibei", 2),
+    ]
+
+    def test_contains_anthem_exact_tag(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "garifuna")
+        assert "<ANTHEM_EXACT" in ctx
+
+    def test_contains_first_line(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "garifuna")
+        assert "Wadimalu gundati lau bareini" in ctx
+
+    def test_contains_last_line(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "garifuna")
+        assert "Wadimalu biri le moweidibei" in ctx
+
+    def test_first_line_before_last_line(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "garifuna")
+        assert ctx.index("Wadimalu gundati lau bareini") < ctx.index("Wadimalu biri le moweidibei")
+
+    def test_contains_attribution_disclaimer(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "garifuna")
+        assert "not been independently" in ctx.lower()
+
+    def test_contains_source_citation(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "garifuna")
+        assert "Himno Nacional de Guatemala" in ctx
+
+    def test_empty_chunks_returns_empty_string(self):
+        assert _nodes._build_anthem_context([], "garifuna") == ""
+
+    def test_lang_label_spanish(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "spanish")
+        assert 'lang="Spanish"' in ctx
+
+    def test_lang_label_english(self):
+        ctx = _nodes._build_anthem_context(self._CHUNKS, "english")
+        assert 'lang="English"' in ctx
+
 
 # ─── INTEGRATION: anthem retrieval ──────────────────────────────────────────
 
@@ -176,8 +333,51 @@ class TestAnthemRetrieval:
             f"No anthem chunks in retrieval pool. Sources: {sources}"
         )
 
+    def test_anthem_first_and_last_line_present(self):
+        """Engine must include both the first and final Garífuna lines in one response."""
+        response = _ask_chat("Show me the complete Guatemala national anthem in Garifuna")
+        assert "Wadimalu gundati lau bareini" in response, (
+            f"Expected first line 'Wadimalu gundati lau bareini' in response, got:\n{response}"
+        )
+        assert "Wadimalu biri le moweidibei" in response, (
+            f"Expected final line 'Wadimalu biri le moweidibei' in response, got:\n{response}"
+        )
+
+    def test_anthem_does_not_mix_spanish_in_garifuna_response(self):
+        """Garífuna anthem response must not include Spanish lyric lines."""
+        response = _ask_chat("Show me the Garifuna lyrics of the national anthem")
+        # Spanish anthem line that must NOT appear when Garífuna is requested
+        assert "Guatemala feliz" not in response, (
+            "Garífuna anthem response incorrectly included Spanish lyrics"
+        )
+
+    def test_anthem_spanish_section_returned_on_spanish_request(self):
+        """Requesting the Spanish version must return Spanish lyrics."""
+        response = _ask_chat("Show me the Spanish version of the national anthem")
+        assert "Guatemala" in response, (
+            f"Spanish anthem request did not return Spanish lyrics:\n{response}"
+        )
+        assert "Wadimalu" not in response, (
+            "Spanish anthem request incorrectly included Garífuna lyrics"
+        )
+
+    def test_anthem_attribution_present(self):
+        """Response must acknowledge that the Garífuna text is an unverified transcription."""
+        response = _ask_chat("Show me the Guatemala national anthem in Garifuna")
+        lower = response.lower()
+        attribution_signals = [
+            "transcription",
+            "contributed",
+            "not independently",
+            "not been independently",
+            "verified",
+        ]
+        assert any(sig in lower for sig in attribution_signals), (
+            f"Response missing attribution disclaimer. Got:\n{response}"
+        )
+
     def test_anthem_spanish_query(self):
-        """Spanish anthem query must also return Garífuna lyrics."""
+        """Spanish anthem query must return Garífuna lyrics by default."""
         response = _ask_chat("¿Cuál es la letra del himno nacional en garífuna?", lang="es")
         assert "Wadimalu" in response, (
             f"Spanish anthem query did not return Garífuna lyrics:\n{response}"

@@ -210,6 +210,45 @@ class VectorStoreManager:
             print(f"Page search error: {e}")
             return []
 
+    def source_ordered_search(self, source_pattern: str) -> list[dict]:
+        """
+        Return ALL chunks from a source in original document order (chunk_index).
+
+        No vector distance is computed — this is a metadata-only query. Used for
+        documents where complete, ordered coverage is required, such as the national
+        anthem, where semantic ranking would reorder or silently drop stanzas.
+
+        Returns dicts with page_content and metadata. No k limit.
+        """
+        sql = """
+            SELECT e.document, e.cmetadata
+            FROM langchain_pg_embedding AS e
+            JOIN langchain_pg_collection AS c ON e.collection_id = c.uuid
+            WHERE c.name = :collection_name
+              AND e.cmetadata->>'source' ILIKE :source_pattern
+            ORDER BY (e.cmetadata->>'chunk_index')::int
+        """
+        try:
+            with self._engine.connect() as conn:
+                rows = conn.execute(
+                    text(sql),
+                    {
+                        "collection_name": self.collection_name,
+                        "source_pattern": source_pattern,
+                    },
+                ).mappings().all()
+            return [
+                {
+                    "page_content": row["document"] or "",
+                    "metadata": row["cmetadata"] or {},
+                }
+                for row in rows
+                if (row["document"] or "").strip()
+            ]
+        except Exception as e:
+            print(f"Source ordered search error: {e}")
+            return []
+
     def source_keyword_search(self, query: str, source_pattern: str, k: int = 8) -> list[dict]:
         """Keyword search scoped to a specific source document (ILIKE pattern)."""
         terms = [term for term in re.findall(r"\b\w+\b", query.lower()) if len(term) > 2]

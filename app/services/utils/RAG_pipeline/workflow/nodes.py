@@ -39,6 +39,25 @@ _ROLE_TO_SOURCE_PATTERN: dict[str, str] = {
 # Used by the deterministic anthem retrieval path.
 _ANTHEM_SOURCE_PATTERN = "%HIMNO_NACIONAL_GUATEMALA_GARIFUNA%"
 
+# Language detection patterns for anthem section selection.
+# Applied in order; first match wins. Defaults to "garifuna" if none match.
+_ANTHEM_LANG_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r'\b(spanish|español|en\s+español)\b', re.I), "spanish"),
+    (re.compile(r'\b(english|en\s+inglés|inglés)\b', re.I), "english"),
+]
+
+# Section header patterns for the anthem DOCX.
+# A short chunk (≤ _ANTHEM_HEADER_MAX_CHARS) matching one of these is treated
+# as a section boundary marker, not a lyrics line.
+_ANTHEM_SECTION_HEADERS: dict[str, re.Pattern] = {
+    "garifuna": re.compile(r'\bgar[ií]funa\b', re.I),
+    "spanish":  re.compile(r'\bespa[ñn]ol\b|\bversión\s+en\s+espa[ñn]ol\b', re.I),
+    "english":  re.compile(r'\benglish\b|\bversión\s+en\s+inglés\b', re.I),
+}
+
+# Chunks shorter than this may be section headers, not lyrics.
+_ANTHEM_HEADER_MAX_CHARS = 120
+
 # Bilingual retrieval expansion for lexicon misses.
 # When the lexical parser extracts a term that returns no lexicon rows, these
 # expansions run as supplementary RAG queries to surface the documented equivalent.
@@ -394,6 +413,84 @@ class Nodes:
         "STRUCTURED_LEXICON":                     "LEXICON",
         "NATIONAL_ANTHEM":                        "HIMNO",
     }
+
+    def _detect_anthem_language(self, query: str) -> str:
+        """Detect which language section of the anthem was requested. Defaults to Garífuna."""
+        for pattern, lang in _ANTHEM_LANG_PATTERNS:
+            if pattern.search(query):
+                return lang
+        return "garifuna"
+
+    def _filter_anthem_section(self, chunks: list[dict], language: str) -> list[dict]:
+        """
+        Extract the language-specific section from ordered anthem chunks.
+
+        Scans for short header chunks matching a language keyword to identify
+        section boundaries. Returns only the chunks in the requested section.
+
+        Falls back to all chunks if no section markers are found, ensuring the
+        anthem is never silently reduced to empty.
+        """
+        headers: list[tuple[int, str]] = []
+        for i, chunk in enumerate(chunks):
+            text = chunk.get("page_content", "").strip()
+            if len(text) <= _ANTHEM_HEADER_MAX_CHARS:
+                for lang, pattern in _ANTHEM_SECTION_HEADERS.items():
+                    if pattern.search(text):
+                        headers.append((i, lang))
+                        break
+
+        if not headers:
+            return chunks
+
+        start_idx: int | None = None
+        end_idx = len(chunks)
+
+        for h_pos, (chunk_i, h_lang) in enumerate(headers):
+            if h_lang == language:
+                start_idx = chunk_i
+                if h_pos + 1 < len(headers):
+                    end_idx = headers[h_pos + 1][0]
+                break
+
+        if start_idx is None:
+            return chunks
+
+        section = chunks[start_idx + 1 : end_idx]
+        return section if section else chunks
+
+    def _build_anthem_context(self, chunks: list[dict], language: str) -> str:
+        """
+        Build a verbatim context block for the national anthem.
+
+        The <ANTHEM_EXACT> tag instructs the LLM to output the enclosed lyrics
+        character-for-character with no alterations. Attribution identifies the
+        source and notes that the Garífuna transcription has not been independently
+        linguistically verified.
+        """
+        lyrics_parts = [
+            chunk.get("page_content", "").strip()
+            for chunk in chunks
+            if chunk.get("page_content", "").strip()
+        ]
+        if not lyrics_parts:
+            return ""
+
+        full_lyrics = "\n\n".join(lyrics_parts)
+        lang_labels = {"garifuna": "Garífuna", "spanish": "Spanish", "english": "English"}
+        lang_label = lang_labels.get(language, "Garífuna")
+
+        return (
+            f'<ANTHEM_EXACT lang="{lang_label}">\n'
+            f"{full_lyrics}\n"
+            f"</ANTHEM_EXACT>\n"
+            f"[Source: Himno Nacional de Guatemala — Versión Garífuna]\n"
+            f"<ANTHEM_ATTRIBUTION>\n"
+            f"The {lang_label} lyrics above are a contributed transcription of the "
+            f"Guatemala national anthem. The Garífuna text has not been independently "
+            f"linguistically verified. Present it accurately as documented without alteration.\n"
+            f"</ANTHEM_ATTRIBUTION>"
+        )
 
     def _build_context(self, docs: list[dict]) -> str:
         parts = []
@@ -870,36 +967,36 @@ class Nodes:
                     }
                 # No results from the named source → fall through to general retrieval.
 
-            # 2.7. National anthem: deterministic source-pinned retrieval.
-            # When the query is about the Guatemala national anthem, bypass
-            # probabilistic ranking and return all indexed anthem chunks directly.
-            # This guarantees full lyrics delivery and prevents the engine from
-            # incorrectly reporting the text as unavailable.
-            # Falls through gracefully if the document has not been indexed yet.
+            # 2.7. National anthem: deterministic source-ordered retrieval.
+            # Retrieves ALL anthem chunks in original document order (chunk_index),
+            # isolates the requested language section, and injects an <ANTHEM_EXACT>
+            # verbatim block so the LLM cannot shorten, reorder, or paraphrase lyrics.
+            # Falls through to general retrieval if the document is not yet indexed.
             anthem_intent = detect_intent(query)
             if anthem_intent == Intent.ANTHEM:
-                anthem_chunks_raw = self.vector_store.source_targeted_search(
-                    query=query,
+                anthem_language = self._detect_anthem_language(query)
+                ordered_chunks = self.vector_store.source_ordered_search(
                     source_pattern=_ANTHEM_SOURCE_PATTERN,
-                    k=30,
                 )
-                anthem_docs = [
-                    {
-                        "page_content": c["page_content"],
-                        "metadata": c["metadata"],
-                        "vector_score": c.get("distance", 1.0),
-                        "keyword_score": 0.0,
-                        "hybrid_score": 1.0 / (1.0 + max(float(c.get("distance", 1.0)), 0.0)),
-                        "retrieval_source": "anthem_targeted",
-                    }
-                    for c in anthem_chunks_raw
-                    if c.get("page_content", "").strip()
-                ]
-                if anthem_docs:
-                    return {
-                        "context": self._build_context(anthem_docs),
-                        "retrieved_docs": anthem_docs,
-                    }
+                if ordered_chunks:
+                    section_chunks = self._filter_anthem_section(ordered_chunks, anthem_language)
+                    anthem_docs = [
+                        {
+                            "page_content": c["page_content"],
+                            "metadata": c["metadata"],
+                            "vector_score": None,
+                            "keyword_score": 0.0,
+                            "hybrid_score": 1.0,
+                            "retrieval_source": "anthem_ordered",
+                        }
+                        for c in section_chunks
+                        if c.get("page_content", "").strip()
+                    ]
+                    if anthem_docs:
+                        return {
+                            "context": self._build_anthem_context(anthem_docs, anthem_language),
+                            "retrieved_docs": anthem_docs,
+                        }
 
             # 2.8. Contextual query expansion: for specific phrase patterns whose
             # natural-language form does not match the indexed vocabulary, supplement
