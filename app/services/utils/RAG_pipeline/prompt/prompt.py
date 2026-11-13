@@ -13,6 +13,7 @@ The retrieved context may come from the following sources. Use the source label 
 - **Diccionario Garífuna**: The original printed dictionary. Use for word-level definitions and provenance verification.
 - **Libro Serie I**: A foundational language education textbook. Use for alphabet, pronunciation, vowels, consonants, basic vocabulary, numbers, and counting. Cite the author as Mauricio Enríquez.
 - **Libro Garífuna II**: An advanced language and cultural reference. Use for grammar, sentence construction, syllables, and cultural or historical content. Attribute claims explicitly to Elmer Mauricio Enríquez Bermúdez.
+- **Himno Nacional de Guatemala — Versión Garífuna**: The Guatemala national anthem in Garífuna, Spanish, and English. When this source is retrieved, present the lyrics exactly as they appear in the retrieved text. Do not alter, retranslate, correct, or paraphrase any Garífuna lyrics. Preserve every word, diacritic, and line break as documented. The first line in Garífuna is "Wadimalu gundati lau bareini" and the final line is "Wadimalu biri le moweidibei".
 
 When more than one source is relevant, cite all of them.
 

@@ -32,7 +32,12 @@ _ROLE_TO_SOURCE_PATTERN: dict[str, str] = {
     "FOUNDATIONAL_LANGUAGE_EDUCATION":        "%LIBRO SERIE I%",
     "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT": "%LIBRO GARIFUNA II%",
     "DICTIONARY":                             "%DICCIONARIO GARIFUNA%",
+    "NATIONAL_ANTHEM":                        "%HIMNO_NACIONAL_GUATEMALA_GARIFUNA%",
 }
+
+# Source-path ILIKE pattern for the Guatemala national anthem.
+# Used by the deterministic anthem retrieval path.
+_ANTHEM_SOURCE_PATTERN = "%HIMNO_NACIONAL_GUATEMALA_GARIFUNA%"
 
 # Bilingual retrieval expansion for lexicon misses.
 # When the lexical parser extracts a term that returns no lexicon rows, these
@@ -387,6 +392,7 @@ class Nodes:
         "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT": "GAR_II",
         "DICTIONARY":                             "DICC",
         "STRUCTURED_LEXICON":                     "LEXICON",
+        "NATIONAL_ANTHEM":                        "HIMNO",
     }
 
     def _build_context(self, docs: list[dict]) -> str:
@@ -864,7 +870,38 @@ class Nodes:
                     }
                 # No results from the named source → fall through to general retrieval.
 
-            # 2.7. Contextual query expansion: for specific phrase patterns whose
+            # 2.7. National anthem: deterministic source-pinned retrieval.
+            # When the query is about the Guatemala national anthem, bypass
+            # probabilistic ranking and return all indexed anthem chunks directly.
+            # This guarantees full lyrics delivery and prevents the engine from
+            # incorrectly reporting the text as unavailable.
+            # Falls through gracefully if the document has not been indexed yet.
+            anthem_intent = detect_intent(query)
+            if anthem_intent == Intent.ANTHEM:
+                anthem_chunks_raw = self.vector_store.source_targeted_search(
+                    query=query,
+                    source_pattern=_ANTHEM_SOURCE_PATTERN,
+                    k=30,
+                )
+                anthem_docs = [
+                    {
+                        "page_content": c["page_content"],
+                        "metadata": c["metadata"],
+                        "vector_score": c.get("distance", 1.0),
+                        "keyword_score": 0.0,
+                        "hybrid_score": 1.0 / (1.0 + max(float(c.get("distance", 1.0)), 0.0)),
+                        "retrieval_source": "anthem_targeted",
+                    }
+                    for c in anthem_chunks_raw
+                    if c.get("page_content", "").strip()
+                ]
+                if anthem_docs:
+                    return {
+                        "context": self._build_context(anthem_docs),
+                        "retrieved_docs": anthem_docs,
+                    }
+
+            # 2.8. Contextual query expansion: for specific phrase patterns whose
             # natural-language form does not match the indexed vocabulary, supplement
             # the pool with a targeted query that surfaces the documented content.
             # Expansions are source-verified (see _CONTEXTUAL_QUERY_EXPANSIONS).

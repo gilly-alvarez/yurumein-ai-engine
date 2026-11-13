@@ -9,6 +9,7 @@ from enum import Enum
 
 
 class Intent(str, Enum):
+    ANTHEM                = "ANTHEM"
     TRANSLATE             = "TRANSLATE"
     DEFINE                = "DEFINE"
     PRONUNCIATION         = "PRONUNCIATION"
@@ -23,6 +24,7 @@ class Intent(str, Enum):
 # Preferred source roles in priority order per intent.
 # Empty list means no preference — all sources compete equally.
 _INTENT_SOURCES: dict[Intent, list[str]] = {
+    Intent.ANTHEM:                ["NATIONAL_ANTHEM"],
     Intent.TRANSLATE:             ["STRUCTURED_LEXICON", "DICTIONARY"],
     Intent.DEFINE:                ["STRUCTURED_LEXICON", "DICTIONARY", "FOUNDATIONAL_LANGUAGE_EDUCATION"],
     Intent.PRONUNCIATION:         ["FOUNDATIONAL_LANGUAGE_EDUCATION", "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT"],
@@ -37,6 +39,14 @@ _INTENT_SOURCES: dict[Intent, list[str]] = {
 # Patterns ordered most-specific to least-specific.
 # First match wins.
 _INTENT_PATTERNS: list[tuple[re.Pattern, Intent]] = [
+    # National anthem — most specific; must precede cultural/historical
+    (re.compile(
+        r'\b(national\s+anthem|himno\s+nacional|hymn|himno\s+gar[ií]funa'
+        r'|gar[ií]funa\s+anthem|himno\s+de\s+guatemala|guatemala\s+anthem'
+        r'|anthem\s+of\s+guatemala|letra\s+del\s+himno|wadimalu)\b',
+        re.I,
+    ), Intent.ANTHEM),
+
     # Counting / numbers
     (re.compile(
         r'\b(count(?:ing)?|numbers?|n[uú]meros?|contar|numeraci[oó]n|digits?|arithmetic|math(?:ematics)?)\b',
