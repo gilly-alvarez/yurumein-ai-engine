@@ -60,6 +60,15 @@ _ROLE_MAP: list[tuple[str, SourceMeta]] = [
         ),
     ),
     (
+        "HIMNO_NACIONAL_GUATEMALA_GARIFUNA",
+        SourceMeta(
+            role="NATIONAL_ANTHEM",
+            display="Himno Nacional de Guatemala — Versión Garífuna",
+            priority=4,
+            attribution="",
+        ),
+    ),
+    (
         "MUSICAL INSTRUMENTS",
         SourceMeta(
             role="SUPPLEMENTARY",
