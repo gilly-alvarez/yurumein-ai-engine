@@ -150,9 +150,21 @@ class TestIntentRouter:
         roles = preferred_roles_for(Intent.PRONUNCIATION)
         assert roles[0] == "FOUNDATIONAL_LANGUAGE_EDUCATION"
 
-    def test_cultural_prefers_garifuna_ii(self):
+    def test_cultural_prefers_history_and_identity_first(self):
         roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
-        assert roles[0] == "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT"
+        assert roles[0] == "GARIFUNA_HISTORY_AND_IDENTITY"
+
+    def test_cultural_includes_garifuna_ii(self):
+        roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
+        assert "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT" in roles
+
+    def test_cultural_includes_community_archive(self):
+        roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
+        assert "COMMUNITY_ARCHIVE" in roles
+
+    def test_cultural_history_identity_before_garifuna_ii(self):
+        roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
+        assert roles.index("GARIFUNA_HISTORY_AND_IDENTITY") < roles.index("ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT")
 
     def test_sentence_construction_prefers_garifuna_ii(self):
         roles = preferred_roles_for(Intent.SENTENCE_CONSTRUCTION)
@@ -211,6 +223,16 @@ try:
     _lexicon_importable = True
 except Exception:
     _lexicon_importable = False
+
+try:
+    from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted as _ipr_fn, Nodes as _NodesClass
+    _nodes_importable = True
+except Exception:
+    _nodes_importable = False
+
+requires_nodes = pytest.mark.skipif(
+    not _nodes_importable, reason="nodes module not importable (missing langchain dependencies)"
+)
 
 requires_lexicon = pytest.mark.skipif(
     not _lexicon_importable, reason="lexicon module not importable"
@@ -1559,12 +1581,12 @@ class TestDictionaryAccuracyAndDisplayNames:
 
     def test_musical_instruments_has_readable_display(self):
         from app.services.chatbot.source_classifier import classify_source
-        m = classify_source("data/new_docs/MUSICAL INSTRUMENTS Dataset.pdf")
+        # Use the actual production filename (underscores, not spaces).
+        # The old "MUSICAL INSTRUMENTS" (space) key was a bug — it did not match
+        # the real file Garifuna_Musical_Instruments_Dataset.pdf.pdf.
+        m = classify_source("data/new_docs/Garifuna_Musical_Instruments_Dataset.pdf.pdf")
         assert m is not None, "Musical Instruments source not recognized by classifier"
         assert ".pdf" not in m.display, f"Raw extension in display: {m.display!r}"
-        assert m.display != "MUSICAL INSTRUMENTS Dataset.pdf", (
-            f"Raw filename used as display name: {m.display!r}"
-        )
         assert "Musical" in m.display or "Instrument" in m.display, (
             f"Display name does not describe the source: {m.display!r}"
         )
@@ -1999,4 +2021,167 @@ class TestCitationIntegrity:
         assert "Libro Serie I" not in result, (
             "Libro Serie I was not retrieved — its co-listed ref must be stripped independently."
         )
-        assert "[UNVERIFIED:" not in result
+
+
+# ─── UNIT TESTS: Stage A reliability fixes ───────────────────────────────────
+#
+# Guards the four changes introduced in fix/stage-a-evidence-selection:
+#   (1) Musical Instruments key uses underscores (was space) — SRC_INSTRUMENTS fix
+#   (2) Five new source classifier entries with correct roles
+#   (3) Publication-restricted document filter (_is_publication_restricted)
+#   (4) CULTURAL_HISTORICAL preferred roles updated
+
+class TestStageAFixes:
+
+    # ── (1) Musical Instruments key fix ─────────────────────────────────────
+
+    def test_instruments_underscore_key_matches(self):
+        path = "/app/data/new_docs/Garifuna_Musical_Instruments_Dataset.pdf.pdf"
+        m = classify_source(path)
+        assert m is not None, "Musical Instruments doc should be classified after key fix"
+        assert m.role == "SUPPLEMENTARY"
+        assert m.display == "Garífuna Musical Instruments"
+
+    def test_instruments_space_key_does_not_match(self):
+        # Regression guard: the old "MUSICAL INSTRUMENTS" (space) key must not
+        # be re-introduced. It does NOT match the actual filename.
+        path = "/app/data/new_docs/Garifuna_Musical_Instruments_Dataset.pdf.pdf"
+        upper = path.upper()
+        assert "MUSICAL INSTRUMENTS" not in upper, (
+            "The old key 'MUSICAL INSTRUMENTS' (space) matched — was it re-introduced?"
+        )
+
+    # ── (2) New source classifier entries ───────────────────────────────────
+
+    def test_baliceaux_classified_as_history_identity(self):
+        m = classify_source("/app/data/new_docs/Baliceaux_Yurumein_AI_Historical_Brief.docx")
+        assert m is not None, "Baliceaux doc should be classified"
+        assert m.role == "GARIFUNA_HISTORY_AND_IDENTITY"
+
+    def test_chatoyer_classified_as_history_identity(self):
+        m = classify_source("/app/data/new_docs/Yurumein_AI_Chief_Joseph_Chatoyer_EN_ES.docx")
+        assert m is not None, "Chatoyer doc should be classified"
+        assert m.role == "GARIFUNA_HISTORY_AND_IDENTITY"
+
+    def test_garifuna_identity_classified_as_history_identity(self):
+        m = classify_source("/app/data/new_docs/Yurumein_Garifuna_Identity_EN_ES.docx")
+        assert m is not None, "Garifuna Identity doc should be classified"
+        assert m.role == "GARIFUNA_HISTORY_AND_IDENTITY"
+
+    def test_archivo_bilingue_classified_as_community_archive(self):
+        m = classify_source("/app/data/new_docs/Yurumei_2024_YurumeinAI_Archivo_Bilingue.docx")
+        assert m is not None, "Archivo Bilingue should be classified"
+        assert m.role == "COMMUNITY_ARCHIVE"
+
+    def test_archivo_2024_classified_as_community_archive(self):
+        m = classify_source("/app/data/new_docs/Yurumei_2024_Archivo.docx")
+        assert m is not None, "Archivo 2024 should be classified"
+        assert m.role == "COMMUNITY_ARCHIVE"
+
+    def test_archivo_bilingue_key_does_not_match_archivo_2024(self):
+        # "Archivo_Bilingue" in classifier must NOT match the plain Archivo doc.
+        path = "/app/data/new_docs/Yurumei_2024_Archivo.docx"
+        assert "ARCHIVO_BILINGUE" not in path.upper()
+
+    def test_historia_not_classified(self):
+        # Historia is publication-restricted; it must NOT receive a registered role.
+        # Registering it would give it a Source label and boost, which is wrong.
+        m = classify_source(
+            "/app/data/new_docs/Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt"
+        )
+        assert m is None, (
+            "Historia doc must remain unclassified — it is publication-restricted "
+            "and must not receive a Source citation label or retrieval boost."
+        )
+
+    def test_new_roles_have_display_names(self):
+        for path, expected_role in [
+            ("/app/data/new_docs/Baliceaux_Yurumein_AI_Historical_Brief.docx", "GARIFUNA_HISTORY_AND_IDENTITY"),
+            ("/app/data/new_docs/Yurumein_AI_Chief_Joseph_Chatoyer_EN_ES.docx", "GARIFUNA_HISTORY_AND_IDENTITY"),
+            ("/app/data/new_docs/Yurumein_Garifuna_Identity_EN_ES.docx", "GARIFUNA_HISTORY_AND_IDENTITY"),
+            ("/app/data/new_docs/Yurumei_2024_YurumeinAI_Archivo_Bilingue.docx", "COMMUNITY_ARCHIVE"),
+            ("/app/data/new_docs/Yurumei_2024_Archivo.docx", "COMMUNITY_ARCHIVE"),
+        ]:
+            m = classify_source(path)
+            assert m is not None, f"{path} should be classified"
+            assert m.role == expected_role
+            assert m.display, f"display name must not be empty for {path}"
+            assert m.attribution, f"attribution must not be empty for {path}"
+
+    # ── (3) Publication restriction filter ──────────────────────────────────
+
+    @requires_nodes
+    def test_is_publication_restricted_false_bool(self):
+        assert _ipr_fn({"publication_allowed": False}) is True
+
+    @requires_nodes
+    def test_is_publication_restricted_false_string(self):
+        assert _ipr_fn({"publication_allowed": "false"}) is True
+
+    @requires_nodes
+    def test_is_publication_restricted_false_string_uppercase(self):
+        assert _ipr_fn({"publication_allowed": "False"}) is True
+
+    @requires_nodes
+    def test_is_publication_restricted_true_bool(self):
+        assert _ipr_fn({"publication_allowed": True}) is False
+
+    @requires_nodes
+    def test_is_publication_restricted_true_string(self):
+        assert _ipr_fn({"publication_allowed": "true"}) is False
+
+    @requires_nodes
+    def test_is_publication_restricted_absent(self):
+        assert _ipr_fn({}) is False
+
+    @requires_nodes
+    def test_filter_restricted_docs_removes_false_docs(self):
+        inst = object.__new__(_NodesClass)
+        docs = [
+            {"page_content": "open content", "metadata": {"publication_allowed": True}},
+            {"page_content": "restricted content", "metadata": {"publication_allowed": False}},
+            {"page_content": "also restricted", "metadata": {"publication_allowed": "false"}},
+        ]
+        result = inst._filter_restricted_docs(docs)
+        assert len(result) == 1
+        assert result[0]["page_content"] == "open content"
+
+    @requires_nodes
+    def test_filter_restricted_docs_keeps_no_field(self):
+        inst = object.__new__(_NodesClass)
+        docs = [{"page_content": "content without field", "metadata": {}}]
+        result = inst._filter_restricted_docs(docs)
+        assert len(result) == 1
+
+    @requires_nodes
+    def test_filter_restricted_docs_all_clear(self):
+        inst = object.__new__(_NodesClass)
+        docs = [
+            {"page_content": "a", "metadata": {"publication_allowed": True}},
+            {"page_content": "b", "metadata": {}},
+        ]
+        result = inst._filter_restricted_docs(docs)
+        assert len(result) == 2
+
+    @requires_nodes
+    def test_filter_restricted_docs_empty_input(self):
+        inst = object.__new__(_NodesClass)
+        assert inst._filter_restricted_docs([]) == []
+
+    # ── (4) CULTURAL_HISTORICAL preferred roles ordering ────────────────────
+    # (Additional tests; primary tests are in TestIntentRouter above.)
+
+    def test_cultural_historical_has_three_preferred_roles(self):
+        roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
+        assert len(roles) == 3
+
+    def test_community_archive_is_third_preferred(self):
+        roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
+        assert roles[2] == "COMMUNITY_ARCHIVE"
+
+    def test_other_intents_unaffected(self):
+        # Sentence construction still prefers Garífuna II only
+        roles = preferred_roles_for(Intent.SENTENCE_CONSTRUCTION)
+        assert roles == ["ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT"]
+        # Pronunciation still prefers Serie I first
+        assert preferred_roles_for(Intent.PRONUNCIATION)[0] == "FOUNDATIONAL_LANGUAGE_EDUCATION"

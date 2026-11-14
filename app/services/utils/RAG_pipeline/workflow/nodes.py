@@ -33,6 +33,8 @@ _ROLE_TO_SOURCE_PATTERN: dict[str, str] = {
     "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT": "%LIBRO GARIFUNA II%",
     "DICTIONARY":                             "%DICCIONARIO GARIFUNA%",
     "NATIONAL_ANTHEM":                        "%HIMNO_NACIONAL_GUATEMALA_GARIFUNA%",
+    "GARIFUNA_HISTORY_AND_IDENTITY":          "%GARIFUNA_IDENTITY_EN_ES%",
+    "COMMUNITY_ARCHIVE":                      "%ARCHIVO_BILINGUE%",
 }
 
 # Source-path ILIKE pattern for the Guatemala national anthem.
@@ -118,6 +120,12 @@ _CONTEXTUAL_QUERY_EXPANSIONS: list[tuple] = [
         "Serie I p.8/p.45: Aban=1 (Uno), Biáma=2 (Dos), Ürüwa=3 (Tres)",
     ),
 ]
+
+
+def _is_publication_restricted(meta: dict) -> bool:
+    """Return True when chunk metadata signals publication_allowed=false."""
+    pa = meta.get("publication_allowed")
+    return pa is False or (isinstance(pa, str) and pa.lower() == "false")
 
 
 class Nodes:
@@ -380,6 +388,10 @@ class Nodes:
 
         return pool + additional
 
+    def _filter_restricted_docs(self, docs: list[dict]) -> list[dict]:
+        """Remove chunks whose metadata signals publication_allowed=false (fail-closed)."""
+        return [d for d in docs if not _is_publication_restricted(d.get("metadata") or {})]
+
     def _filter_low_info(self, docs: list[dict]) -> list[dict]:
         """Deprioritize chunks that are likely worksheet noise (too short)."""
         meaningful = [d for d in docs if len(d.get("page_content", "")) >= _MIN_CHUNK_CHARS]
@@ -412,6 +424,9 @@ class Nodes:
         "DICTIONARY":                             "DICC",
         "STRUCTURED_LEXICON":                     "LEXICON",
         "NATIONAL_ANTHEM":                        "HIMNO",
+        "SUPPLEMENTARY":                          "SUPPL",
+        "GARIFUNA_HISTORY_AND_IDENTITY":          "HIST_ID",
+        "COMMUNITY_ARCHIVE":                      "ARCHIVO",
     }
 
     def _detect_anthem_language(self, query: str) -> str:
@@ -1067,6 +1082,13 @@ class Nodes:
             #    even when it doesn't rank in the global top-10.
             if preferred:
                 pool = self._topup_from_preferred_source(retrieval_query, pool, preferred)
+
+            # 5a. Remove publication-restricted chunks before ranking.
+            # Chunks with publication_allowed=false are staging drafts not approved
+            # for public answers. This runs after top-up so targeted searches also
+            # have their restricted results removed. Fail-closed: if a chunk signals
+            # restriction, it is excluded regardless of its relevance score.
+            pool = self._filter_restricted_docs(pool)
 
             # 6. Filter low-information chunks.
             filtered = self._filter_low_info(pool)

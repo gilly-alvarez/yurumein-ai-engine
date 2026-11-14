@@ -69,7 +69,7 @@ _ROLE_MAP: list[tuple[str, SourceMeta]] = [
         ),
     ),
     (
-        "MUSICAL INSTRUMENTS",
+        "MUSICAL_INSTRUMENTS_DATASET",
         SourceMeta(
             role="SUPPLEMENTARY",
             display="Garífuna Musical Instruments",
@@ -84,6 +84,51 @@ _ROLE_MAP: list[tuple[str, SourceMeta]] = [
             display="Garífuna Language Overview",
             priority=4,
             attribution="",
+        ),
+    ),
+    (
+        "BALICEAUX_YURUMEIN_AI_HISTORICAL_BRIEF",
+        SourceMeta(
+            role="GARIFUNA_HISTORY_AND_IDENTITY",
+            display="Baliceaux — Yurumein AI Historical Brief",
+            priority=2,
+            attribution="Yurumein AI — Baliceaux Historical Brief",
+        ),
+    ),
+    (
+        "CHIEF_JOSEPH_CHATOYER",
+        SourceMeta(
+            role="GARIFUNA_HISTORY_AND_IDENTITY",
+            display="Chief Joseph Chatoyer — Yurumein AI",
+            priority=2,
+            attribution="Yurumein AI — Chief Joseph Chatoyer EN/ES",
+        ),
+    ),
+    (
+        "GARIFUNA_IDENTITY_EN_ES",
+        SourceMeta(
+            role="GARIFUNA_HISTORY_AND_IDENTITY",
+            display="Garífuna Identity",
+            priority=2,
+            attribution="Curated from Ben Petersen, 2012/2013; UNESCO",
+        ),
+    ),
+    (
+        "ARCHIVO_BILINGUE",
+        SourceMeta(
+            role="COMMUNITY_ARCHIVE",
+            display="Hijos de Livingston — Archivo Bilingüe",
+            priority=3,
+            attribution="Hijos de Livingston (Livingston, Izabal, Guatemala)",
+        ),
+    ),
+    (
+        "YURUMEI_2024_ARCHIVO.DOCX",
+        SourceMeta(
+            role="COMMUNITY_ARCHIVE",
+            display="Hijos de Livingston — Archivo 2024",
+            priority=3,
+            attribution="Hijos de Livingston (Livingston, Izabal, Guatemala)",
         ),
     ),
 ]
