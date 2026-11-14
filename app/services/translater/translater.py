@@ -154,8 +154,9 @@ Provide only the translated output in {target_language}."""
             ui_lang = (translation_info.get("ui_language") or "en").strip().lower()
             decline_msg = _DECLINE_RESPONSE.get(ui_lang, _DECLINE_RESPONSE["en"])
 
-            is_garifuna_target = target_language.lower() == "garifuna"
-            is_garifuna_source = base_language.lower() == "garifuna"
+            _gar = frozenset({"garifuna", "gar"})
+            is_garifuna_target = target_language.lower() in _gar
+            is_garifuna_source = base_language.lower() in _gar
 
             # Lexicon-first exact lookup for Garífuna targets (EN/ES → Garífuna).
             if is_garifuna_target:
@@ -173,7 +174,7 @@ Provide only the translated output in {target_language}."""
             if is_garifuna_source and not is_garifuna_target:
                 r = self.lexicon.reverse_lookup(text)
                 if r:
-                    col = "english" if "english" in target_language.lower() else "spanish"
+                    col = "english" if target_language.lower() in {"en", "english"} else "spanish"
                     forms = []
                     for row in r:
                         val = (row.get(col) or "").strip()
