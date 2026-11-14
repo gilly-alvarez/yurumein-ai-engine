@@ -150,21 +150,25 @@ class TestIntentRouter:
         roles = preferred_roles_for(Intent.PRONUNCIATION)
         assert roles[0] == "FOUNDATIONAL_LANGUAGE_EDUCATION"
 
-    def test_cultural_prefers_history_and_identity_first(self):
+    def test_cultural_prefers_garifuna_ii_first(self):
+        # Libro II stays at position 0: cultural-practice queries (punta, Dügü,
+        # musical instruments) need its top-up and step-7b guarantee.
         roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
-        assert roles[0] == "GARIFUNA_HISTORY_AND_IDENTITY"
+        assert roles[0] == "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT"
 
-    def test_cultural_includes_garifuna_ii(self):
+    def test_cultural_includes_history_and_identity(self):
         roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
-        assert "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT" in roles
+        assert "GARIFUNA_HISTORY_AND_IDENTITY" in roles
 
     def test_cultural_includes_community_archive(self):
         roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
         assert "COMMUNITY_ARCHIVE" in roles
 
-    def test_cultural_history_identity_before_garifuna_ii(self):
+    def test_cultural_garifuna_ii_before_history_and_identity(self):
+        # Libro II (position 0, 1.4×) precedes History/Identity (position 1, 1.25×)
+        # so cultural-practice content is not displaced by identity-document top-up.
         roles = preferred_roles_for(Intent.CULTURAL_HISTORICAL)
-        assert roles.index("GARIFUNA_HISTORY_AND_IDENTITY") < roles.index("ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT")
+        assert roles.index("ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT") < roles.index("GARIFUNA_HISTORY_AND_IDENTITY")
 
     def test_sentence_construction_prefers_garifuna_ii(self):
         roles = preferred_roles_for(Intent.SENTENCE_CONSTRUCTION)
