@@ -12,6 +12,7 @@ import json
 import uuid
 import asyncio
 from ..utils.RAG_pipeline.workflow.workflow import create_workflow, run_workflow
+from ..utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
 from ..utils.RAG_pipeline.DB.session_manager import SessionManager
 from ..utils.RAG_pipeline.DB.knowledge_gap_manager import get_gap_manager
 from ..utils.RAG_pipeline.vectore_db.pgvector_db import upload_docs_pipeline, VectorStoreManager
@@ -44,6 +45,33 @@ async def require_session_key(key: Optional[str] = Security(_session_key_header)
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden.",
         )
+
+# ---------------------------------------------------------------------------
+# Admin authentication (diagnostic endpoints)
+# ---------------------------------------------------------------------------
+_admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+
+
+async def require_admin_key(key: Optional[str] = Security(_admin_key_header)) -> None:
+    """Require X-Admin-Key on diagnostic endpoints.
+
+    Mirrors the identical dependency in knowledge_gap_router so diagnostic
+    routes use the same credential store without a cross-module dependency.
+    Returns 503 when ADMIN_API_KEY is not configured (fail-secure default).
+    Returns 403 for any missing or incorrect key.
+    """
+    configured = settings.ADMIN_API_KEY
+    if not configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin API key not configured on this server.",
+        )
+    if not key or key != configured:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+
 
 _GAP_PHRASES = (
     # English
@@ -481,9 +509,15 @@ async def upload_docs_RAG(file: UploadFile = File(...)):
         await file.close()
 
 
-@router.get('/retrieval_check', response_model=RetrievalCheckResponse)
+@router.get('/retrieval_check', response_model=RetrievalCheckResponse,
+            dependencies=[Depends(require_admin_key)])
 async def retrieval_check(query: str, k: int = 5):
-    """Check direct vector DB retrieval without running the chat workflow."""
+    """Check direct vector DB retrieval without running the chat workflow.
+
+    Requires X-Admin-Key. Publication-restricted documents are excluded from
+    results even for authenticated administrators — use an offline workflow
+    for auditing restricted source content directly.
+    """
     if not query or not query.strip():
         raise HTTPException(status_code=400, detail="Query is required")
 
@@ -493,6 +527,9 @@ async def retrieval_check(query: str, k: int = 5):
     try:
         vector_store = VectorStoreManager()
         docs = vector_store.similarity_search(query=query.strip(), k=k)
+
+        # Filter publication-restricted documents before returning to caller.
+        docs = [d for d in docs if not _is_publication_restricted(d.metadata or {})]
 
         matches = [
             {
@@ -512,9 +549,15 @@ async def retrieval_check(query: str, k: int = 5):
         raise HTTPException(status_code=500, detail=f"Retrieval check failed: {str(e)}")
 
 
-@router.get('/retrieval_check_hybrid', response_model=HybridRetrievalCheckResponse)
+@router.get('/retrieval_check_hybrid', response_model=HybridRetrievalCheckResponse,
+            dependencies=[Depends(require_admin_key)])
 async def retrieval_check_hybrid(query: str, k: int = 5):
-    """Check merged hybrid retrieval results without running the chat workflow."""
+    """Check merged hybrid retrieval results without running the chat workflow.
+
+    Requires X-Admin-Key. Publication-restricted documents are excluded from
+    results even for authenticated administrators — use an offline workflow
+    for auditing restricted source content directly.
+    """
     if not query or not query.strip():
         raise HTTPException(status_code=400, detail="Query is required")
 
@@ -525,6 +568,9 @@ async def retrieval_check_hybrid(query: str, k: int = 5):
         workflow, node_instance = create_workflow()
         _ = workflow
         docs = node_instance._hybrid_retrieve(query=query.strip(), top_k=k)
+
+        # Filter publication-restricted documents before returning to caller.
+        docs = node_instance._filter_restricted_docs(docs)
 
         matches = [
             {
