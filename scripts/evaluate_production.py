@@ -382,9 +382,13 @@ QUESTIONS = [
         "valid_source_keys": [SRC_DICCIONARIO],
         "expected_passage_fragment": "Baba",
         "notes": (
-            "Lexical parser fires ('how do you say X in Garifuna'). "
-            "Lexicon covers A–An only → lexicon miss → hybrid RAG with LEXICON_NOTE. "
-            "Diccionario p.144 (SIGNIFICADO): Baba, Tata, Úguchilin."
+            "LEXICAL PATH HIT: lexical parser fires. "
+            "Full yurumein_lexicon SQL table (6720+ rows) includes English lookup. "
+            "Row id=6720: english='father' → garifuna='Baba, Tata, Úguchilin'. "
+            "Diccionario p.144 (SIGNIFICADO): Baba, Tata, Úguchilin (documented authority). "
+            "Retrieved_docs=[] is intentional (lexical path); Stage A scores this via "
+            "lexicon_structured_hit, not retrieved_docs matching. "
+            "Fragment 'Baba' IS in the LEXICON_CONTEXT response string."
         ),
     },
     {
@@ -781,6 +785,7 @@ def compute_summary(results: list[dict]) -> dict:
     edge    = [r for r in results if r["is_edge_case"]]
 
     sourced_hybrid = [r for r in sourced if r["top10_applicable"]]
+    lexical_hits   = sum(1 for r in sourced if r.get("lexicon_structured_hit") is True)
 
     primary10  = sum(1 for r in sourced_hybrid if r.get("primary_hit_at_10") is True)
     any10      = sum(1 for r in sourced_hybrid if r.get("any_hit_at_10") is True)
@@ -823,6 +828,7 @@ def compute_summary(results: list[dict]) -> dict:
         "sourced_questions": len(sourced),
         "edge_case_questions": len(edge),
         "hybrid_path_questions": len(sourced_hybrid),
+        "lexical_path_hits": lexical_hits,
         "primary_source_hit_rate_at_10": (
             round(primary10 / len(sourced_hybrid), 3) if sourced_hybrid else None
         ),
@@ -884,6 +890,7 @@ async def evaluate_question(nodes: Nodes, q: dict) -> dict:
         "any_hit_in_context": None,
         "passage_found_at_10": None,
         "passage_found_in_context": None,
+        "lexicon_structured_hit": False,
         "error": None,
         "elapsed_s": None,
     }
@@ -917,23 +924,34 @@ async def evaluate_question(nodes: Nodes, q: dict) -> dict:
             valid_keys = q["valid_source_keys"]
             frag = q["expected_passage_fragment"]
 
-            record["primary_hit_at_10"] = (
-                source_key_in_docs(raw_top10, primary_key) if top10_applicable else None
-            )
-            record["any_hit_at_10"] = (
-                any_source_in_docs(raw_top10, valid_keys) if top10_applicable else None
-            )
-            record["primary_hit_in_context"] = source_key_in_docs(final_docs, primary_key)
-            record["any_hit_in_context"] = any_source_in_docs(final_docs, valid_keys)
+            if retrieval_path == "lexicon":
+                # Structured lexical hit: the pipeline answered via LEXICON_CONTEXT,
+                # not via retrieved_docs (which is intentionally [] on the lexical path).
+                # Score as a full retrieval success; source matching on empty docs
+                # would produce a false MISS.
+                record["lexicon_structured_hit"] = True
+                record["primary_hit_in_context"] = True
+                record["any_hit_in_context"] = True
+                if frag:
+                    record["passage_found_in_context"] = frag.lower() in ctx_string.lower()
+            else:
+                record["primary_hit_at_10"] = (
+                    source_key_in_docs(raw_top10, primary_key) if top10_applicable else None
+                )
+                record["any_hit_at_10"] = (
+                    any_source_in_docs(raw_top10, valid_keys) if top10_applicable else None
+                )
+                record["primary_hit_in_context"] = source_key_in_docs(final_docs, primary_key)
+                record["any_hit_in_context"] = any_source_in_docs(final_docs, valid_keys)
 
-            if frag:
-                record["passage_found_at_10"] = (
-                    any_passage_in_docs(raw_top10, frag, valid_keys)
-                    if top10_applicable else None
-                )
-                record["passage_found_in_context"] = any_passage_in_docs(
-                    final_docs, frag, valid_keys
-                )
+                if frag:
+                    record["passage_found_at_10"] = (
+                        any_passage_in_docs(raw_top10, frag, valid_keys)
+                        if top10_applicable else None
+                    )
+                    record["passage_found_in_context"] = any_passage_in_docs(
+                        final_docs, frag, valid_keys
+                    )
 
     except Exception as exc:
         record["error"] = str(exc)
@@ -983,6 +1001,8 @@ async def main() -> None:
             status = "ERROR"
         elif r["is_edge_case"]:
             status = "DIAG"
+        elif r.get("lexicon_structured_hit"):
+            status = "LEXICON"
         elif r.get("primary_hit_in_context") is True:
             status = "HIT"
         elif r.get("any_hit_in_context") is True:
@@ -1005,6 +1025,7 @@ async def main() -> None:
     print(f"  Sourced questions                    : {summary['sourced_questions']}")
     print(f"  Edge-case questions (diagnostic)     : {summary['edge_case_questions']}")
     print(f"  Hybrid-path questions                : {summary['hybrid_path_questions']}")
+    print(f"  Lexical-path structured hits         : {summary['lexical_path_hits']}")
     print()
     print(f"  Primary source hit-rate@10 (hybrid)  : {summary['primary_source_hit_rate_at_10']}")
     print(f"  Any source hit-rate@10 (hybrid)      : {summary['any_source_hit_rate_at_10']}")

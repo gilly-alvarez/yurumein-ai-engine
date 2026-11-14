@@ -533,6 +533,145 @@ class TestComputeSummary:
         assert s["errors"] == 0
 
 
+# ─── TestLexicalPathScoring ──────────────────────────────────────────────────
+
+class TestLexicalPathScoring:
+    """
+    Unit tests for the lexicon_structured_hit scoring path introduced to fix
+    C6Q1 (father / Baba, Tata, Úguchilin).
+
+    The lexical path in evaluate_question fires when detect_retrieval_path()
+    returns "lexicon" (<LEXICON_CONTEXT> tag present).  It sets:
+      lexicon_structured_hit = True
+      primary_hit_in_context  = True
+      any_hit_in_context      = True
+      passage_found_in_context = (fragment in ctx_string) if fragment else not set
+    retrieved_docs=[] is intentional; source-based scoring on [] would be a
+    false MISS, so lexical hits skip it entirely.
+    """
+
+    def _lexical_record(self, **overrides) -> dict:
+        """Simulate a record produced by the lexical path in evaluate_question."""
+        r = {
+            "category": "Language",
+            "is_edge_case": False,
+            "top10_applicable": False,
+            "primary_hit_at_10": None,
+            "any_hit_at_10": None,
+            "primary_hit_in_context": True,
+            "any_hit_in_context": True,
+            "expected_passage_fragment": None,
+            "passage_found_at_10": None,
+            "passage_found_in_context": None,
+            "lexicon_structured_hit": True,
+            "error": None,
+        }
+        r.update(overrides)
+        return r
+
+    def _hybrid_record(self, **overrides) -> dict:
+        r = {
+            "category": "Language",
+            "is_edge_case": False,
+            "top10_applicable": True,
+            "primary_hit_at_10": True,
+            "any_hit_at_10": True,
+            "primary_hit_in_context": True,
+            "any_hit_in_context": True,
+            "expected_passage_fragment": None,
+            "passage_found_at_10": None,
+            "passage_found_in_context": None,
+            "lexicon_structured_hit": False,
+            "error": None,
+        }
+        r.update(overrides)
+        return r
+
+    def test_lexical_path_hits_key_in_summary(self):
+        s = compute_summary([])
+        assert "lexical_path_hits" in s
+
+    def test_lexical_path_hits_zero_on_empty(self):
+        s = compute_summary([])
+        assert s["lexical_path_hits"] == 0
+
+    def test_lexical_hit_counted(self):
+        s = compute_summary([self._lexical_record()])
+        assert s["lexical_path_hits"] == 1
+
+    def test_non_lexical_not_counted(self):
+        s = compute_summary([self._hybrid_record()])
+        assert s["lexical_path_hits"] == 0
+
+    def test_field_absent_treated_as_false(self):
+        # Records written before this fix lack lexicon_structured_hit entirely.
+        r = self._hybrid_record()
+        del r["lexicon_structured_hit"]
+        s = compute_summary([r])
+        assert s["lexical_path_hits"] == 0
+
+    def test_multiple_lexical_hits_accumulated(self):
+        results = [self._lexical_record(), self._lexical_record(), self._hybrid_record()]
+        s = compute_summary(results)
+        assert s["lexical_path_hits"] == 2
+
+    def test_lexical_hit_excluded_from_hybrid_path_count(self):
+        # top10_applicable=False → NOT in hybrid_path_questions.
+        results = [self._lexical_record(), self._hybrid_record()]
+        s = compute_summary(results)
+        assert s["hybrid_path_questions"] == 1
+
+    def test_lexical_hit_contributes_to_primary_ctx_rate(self):
+        # primary_hit_in_context=True on lexical records → counted in rate.
+        results = [
+            self._lexical_record(),
+            self._hybrid_record(primary_hit_in_context=False),
+        ]
+        s = compute_summary(results)
+        assert s["primary_source_hit_rate_in_context"] == 0.5
+
+    def test_lexical_hit_contributes_to_any_ctx_rate(self):
+        results = [
+            self._lexical_record(),
+            self._hybrid_record(any_hit_in_context=False),
+        ]
+        s = compute_summary(results)
+        assert s["any_source_hit_rate_in_context"] == 0.5
+
+    def test_lexical_passage_hit_scored_in_ctx(self):
+        # Fragment found in LEXICON_CONTEXT string → passage_found_in_context=True.
+        results = [
+            self._lexical_record(
+                expected_passage_fragment="Baba",
+                passage_found_in_context=True,
+            )
+        ]
+        s = compute_summary(results)
+        assert s["passage_recall_in_context"] == 1.0
+
+    def test_lexical_passage_miss_scored_in_ctx(self):
+        results = [
+            self._lexical_record(
+                expected_passage_fragment="Baba",
+                passage_found_in_context=False,
+            )
+        ]
+        s = compute_summary(results)
+        assert s["passage_recall_in_context"] == 0.0
+
+    def test_lexical_record_excluded_from_passage_at_10(self):
+        # Lexical path: top10_applicable=False → not in passage_recall_at_10 denominator.
+        results = [
+            self._lexical_record(
+                expected_passage_fragment="Baba",
+                passage_found_in_context=True,
+            )
+        ]
+        s = compute_summary(results)
+        # No top10-applicable passage questions → rate is None.
+        assert s["passage_recall_at_10"] is None
+
+
 # ─── TestQuestionsIntegrity ───────────────────────────────────────────────────
 
 class TestQuestionsIntegrity:
