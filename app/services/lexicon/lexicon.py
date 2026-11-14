@@ -22,7 +22,7 @@ class YurumeinLexicon:
         """EN/ES -> Garifuna lookup by normalized column."""
         lang = language.lower()
         norm = normalize_term(term)
-        column = "spanish_norm" if lang == "spanish" else "english_norm"
+        column = "spanish_norm" if lang in {"spanish", "es"} else "english_norm"
         sql = text(f"SELECT * FROM yurumein_lexicon WHERE {column} = :term")
         with self.engine.connect() as conn:
             return [dict(r) for r in conn.execute(sql, {"term": norm}).mappings().all()]
