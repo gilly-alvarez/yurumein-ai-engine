@@ -830,3 +830,135 @@ class TestQuestionsIntegrity:
             "At least one question listing SRC_HISTORIA must note its "
             "staging/review status (publication_allowed: false / pending_cultural_review)"
         )
+
+
+# ─── TestRestrictionScoring ───────────────────────────────────────────────────
+
+class TestRestrictionScoring:
+    """
+    Unit tests for restriction_expected / restriction_verified scoring.
+
+    C9Q3 (Historia) is a restriction-check question, not a regular sourced
+    question. Its success criterion is that the restricted source is ABSENT
+    from the public context, not present.
+    """
+
+    def _restriction_record(self, verified: bool) -> dict:
+        return {
+            "category": "Document_Coverage",
+            "is_edge_case": False,
+            "restriction_expected": True,
+            "restriction_verified": verified,
+            "top10_applicable": False,
+            "primary_hit_at_10": None,
+            "any_hit_at_10": None,
+            "primary_hit_in_context": None,
+            "any_hit_in_context": None,
+            "expected_passage_fragment": None,
+            "passage_found_at_10": None,
+            "passage_found_in_context": None,
+            "lexicon_structured_hit": False,
+            "error": None,
+        }
+
+    def _sourced_record(self, **overrides) -> dict:
+        r = {
+            "category": "Test",
+            "is_edge_case": False,
+            "restriction_expected": False,
+            "restriction_verified": None,
+            "top10_applicable": True,
+            "primary_hit_at_10": True,
+            "any_hit_at_10": True,
+            "primary_hit_in_context": True,
+            "any_hit_in_context": True,
+            "expected_passage_fragment": None,
+            "passage_found_at_10": None,
+            "passage_found_in_context": None,
+            "lexicon_structured_hit": False,
+            "error": None,
+        }
+        r.update(overrides)
+        return r
+
+    # ── Question metadata ────────────────────────────────────────────────────
+
+    def test_c9q3_has_restriction_expected(self):
+        c9q3 = next((q for q in QUESTIONS if q["id"] == "C9Q3"), None)
+        assert c9q3 is not None, "C9Q3 not found in QUESTIONS"
+        assert c9q3.get("restriction_expected") is True, (
+            "C9Q3 must have restriction_expected=True — Historia is a restricted document"
+        )
+
+    def test_c9q3_restriction_note_explains_outcome(self):
+        c9q3 = next(q for q in QUESTIONS if q["id"] == "C9Q3")
+        note = c9q3["notes"].lower()
+        assert "restricted_ok" in note or "restriction_leak" in note, (
+            "C9Q3 notes must explain RESTRICTED_OK / RESTRICTION_LEAK outcomes"
+        )
+
+    # ── compute_summary — restriction counts ─────────────────────────────────
+
+    def test_restricted_ok_counted(self):
+        results = [self._restriction_record(verified=True)]
+        s = compute_summary(results)
+        assert s["restriction_questions"] == 1
+        assert s["restriction_verified_count"] == 1
+        assert s["restriction_leak_count"] == 0
+
+    def test_restriction_leak_counted(self):
+        results = [self._restriction_record(verified=False)]
+        s = compute_summary(results)
+        assert s["restriction_questions"] == 1
+        assert s["restriction_verified_count"] == 0
+        assert s["restriction_leak_count"] == 1
+
+    def test_mixed_restriction_results(self):
+        results = [
+            self._restriction_record(verified=True),
+            self._restriction_record(verified=False),
+            self._restriction_record(verified=True),
+        ]
+        s = compute_summary(results)
+        assert s["restriction_questions"] == 3
+        assert s["restriction_verified_count"] == 2
+        assert s["restriction_leak_count"] == 1
+
+    def test_no_restriction_questions_zero_counts(self):
+        results = [self._sourced_record()]
+        s = compute_summary(results)
+        assert s["restriction_questions"] == 0
+        assert s["restriction_verified_count"] == 0
+        assert s["restriction_leak_count"] == 0
+
+    # ── Exclusion from regular sourced metrics ───────────────────────────────
+
+    def test_restriction_question_excluded_from_sourced_count(self):
+        # A restriction_expected record must NOT inflate the sourced hit-rate
+        # denominator.  Only the regular sourced record counts.
+        results = [
+            self._sourced_record(),            # 1 sourced hit
+            self._restriction_record(True),    # restriction-only — excluded
+        ]
+        s = compute_summary(results)
+        assert s["sourced_questions"] == 1
+        assert s["primary_source_hit_rate_in_context"] == 1.0
+
+    def test_restriction_question_does_not_dilute_hit_rate(self):
+        # With two sourced hits and one restriction question (not a hit or miss),
+        # the hit rate must still be 2/2 = 1.0, not 2/3.
+        results = [
+            self._sourced_record(),
+            self._sourced_record(),
+            self._restriction_record(True),
+        ]
+        s = compute_summary(results)
+        assert s["primary_source_hit_rate_in_context"] == 1.0
+
+    def test_restriction_verified_none_not_counted_as_leak(self):
+        # restriction_verified=None (run error) must NOT be counted as a leak.
+        r = self._restriction_record(verified=True)
+        r["restriction_verified"] = None
+        s = compute_summary([r])
+        assert s["restriction_leak_count"] == 0
+        assert s["restriction_verified_count"] == 0

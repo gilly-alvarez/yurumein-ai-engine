@@ -557,11 +557,14 @@ QUESTIONS = [
         "query": "¿Qué información contiene el documento yurumein-history-001 sobre los orígenes garífunas?",
         "valid_source_keys": [SRC_HISTORIA],
         "expected_passage_fragment": "yurumein-history-001",
+        "restriction_expected": True,
         "notes": (
             "TARGET: Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt (58 chunks). "
             "Fragment 'yurumein-history-001' verified in chunk 0 (document_id field). "
-            "CAUTION: this document carries publication_allowed: false and "
-            "review_state: pending_cultural_review. It IS indexed and will be retrieved."
+            "RESTRICTION: publication_allowed: false + pending_cultural_review. "
+            "Historia must NOT appear in public context. "
+            "RESTRICTED_OK = Historia absent (security success). "
+            "RESTRICTION_LEAK = Historia present (security failure)."
         ),
     },
     {
@@ -781,11 +784,16 @@ def compute_summary(results: list[dict]) -> dict:
     total = len(results)
     errors = sum(1 for r in results if r["error"])
 
-    sourced = [r for r in results if not r["is_edge_case"]]
-    edge    = [r for r in results if r["is_edge_case"]]
+    edge         = [r for r in results if r["is_edge_case"]]
+    restricted   = [r for r in results if r.get("restriction_expected")]
+    # Sourced excludes both edge-cases and restriction-only questions from hit-rate metrics.
+    sourced      = [r for r in results if not r["is_edge_case"] and not r.get("restriction_expected")]
 
     sourced_hybrid = [r for r in sourced if r["top10_applicable"]]
     lexical_hits   = sum(1 for r in sourced if r.get("lexicon_structured_hit") is True)
+
+    restriction_verified_count = sum(1 for r in restricted if r.get("restriction_verified") is True)
+    restriction_leak_count     = sum(1 for r in restricted if r.get("restriction_verified") is False)
 
     primary10  = sum(1 for r in sourced_hybrid if r.get("primary_hit_at_10") is True)
     any10      = sum(1 for r in sourced_hybrid if r.get("any_hit_at_10") is True)
@@ -827,6 +835,9 @@ def compute_summary(results: list[dict]) -> dict:
         "errors": errors,
         "sourced_questions": len(sourced),
         "edge_case_questions": len(edge),
+        "restriction_questions": len(restricted),
+        "restriction_verified_count": restriction_verified_count,
+        "restriction_leak_count": restriction_leak_count,
         "hybrid_path_questions": len(sourced_hybrid),
         "lexical_path_hits": lexical_hits,
         "primary_source_hit_rate_at_10": (
@@ -867,8 +878,9 @@ async def evaluate_question(nodes: Nodes, q: dict) -> dict:
       1. Run retrieval; record all returned docs and the retrieval path
       2. No hit/miss scoring — purely diagnostic
     """
-    is_edge_case = not q["valid_source_keys"]
-    primary_key  = q["valid_source_keys"][0] if q["valid_source_keys"] else None
+    is_edge_case        = not q["valid_source_keys"]
+    restriction_expected = q.get("restriction_expected", False)
+    primary_key         = q["valid_source_keys"][0] if q["valid_source_keys"] else None
 
     record: dict = {
         "id": q["id"],
@@ -876,6 +888,8 @@ async def evaluate_question(nodes: Nodes, q: dict) -> dict:
         "query": q["query"],
         "language": q["language"],
         "is_edge_case": is_edge_case,
+        "restriction_expected": restriction_expected,
+        "restriction_verified": None,
         "valid_source_keys": q["valid_source_keys"],
         "primary_source_key": primary_key,
         "expected_passage_fragment": q["expected_passage_fragment"],
@@ -919,8 +933,16 @@ async def evaluate_question(nodes: Nodes, q: dict) -> dict:
             raw_top10 = final_docs
             record["top10_pool"] = record["top5_context"]
 
-        # Scoring — skipped for edge cases.
-        if not is_edge_case:
+        # Restriction check — runs before regular scoring.
+        # For restriction_expected questions (e.g. C9Q3 / Historia):
+        #   RESTRICTED_OK   = restricted source absent from public context (success)
+        #   RESTRICTION_LEAK = restricted source present in public context (failure)
+        if restriction_expected:
+            historia_in_context = source_key_in_docs(final_docs, primary_key or "")
+            record["restriction_verified"] = not historia_in_context
+
+        # Scoring — skipped for edge cases and restriction-only questions.
+        if not is_edge_case and not restriction_expected:
             valid_keys = q["valid_source_keys"]
             frag = q["expected_passage_fragment"]
 
@@ -1001,6 +1023,8 @@ async def main() -> None:
             status = "ERROR"
         elif r["is_edge_case"]:
             status = "DIAG"
+        elif r.get("restriction_expected"):
+            status = "RESTRICTED_OK" if r.get("restriction_verified") else "RESTRICTION_LEAK"
         elif r.get("lexicon_structured_hit"):
             status = "LEXICON"
         elif r.get("primary_hit_in_context") is True:
@@ -1024,6 +1048,9 @@ async def main() -> None:
     print(f"  Retrieval errors                     : {summary['errors']}")
     print(f"  Sourced questions                    : {summary['sourced_questions']}")
     print(f"  Edge-case questions (diagnostic)     : {summary['edge_case_questions']}")
+    print(f"  Restriction-check questions          : {summary['restriction_questions']}")
+    print(f"    RESTRICTED_OK (source absent)      : {summary['restriction_verified_count']}")
+    print(f"    RESTRICTION_LEAK (source present!) : {summary['restriction_leak_count']}")
     print(f"  Hybrid-path questions                : {summary['hybrid_path_questions']}")
     print(f"  Lexical-path structured hits         : {summary['lexical_path_hits']}")
     print()
