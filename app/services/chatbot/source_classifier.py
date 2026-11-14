@@ -29,7 +29,7 @@ _ROLE_MAP: list[tuple[str, SourceMeta]] = [
             role="FOUNDATIONAL_LANGUAGE_EDUCATION",
             display="Libro Serie I",
             priority=2,
-            attribution="Mauricio Enríquez",
+            attribution="Elmer Mauricio Enríquez Bermúdez (ABÜRÜHATI)",
         ),
     ),
     (
@@ -38,7 +38,7 @@ _ROLE_MAP: list[tuple[str, SourceMeta]] = [
             role="ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT",
             display="Libro Garífuna II",
             priority=3,
-            attribution="Elmer Mauricio Enríquez Bermúdez",
+            attribution="Elmer Mauricio Enríquez Bermúdez (ABÜRÜHATI)",
         ),
     ),
     (
@@ -47,7 +47,7 @@ _ROLE_MAP: list[tuple[str, SourceMeta]] = [
             role="DICTIONARY",
             display="Diccionario Garífuna",
             priority=1,
-            attribution="",
+            attribution="Elmer Mauricio Enríquez Bermúdez (ABÜRÜHATI)",
         ),
     ),
     (

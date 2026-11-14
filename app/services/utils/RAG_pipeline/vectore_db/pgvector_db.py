@@ -302,16 +302,26 @@ class VectorStoreManager:
 def upload_docs_pipeline(
     file_paths: Optional[List[str]] = None,
     original_filename: Optional[str] = None,
+    *,
+    confirmed: bool,
 ) -> List[str]:
-    """Process and upload docs with richer chunk metadata.
+    """Process and index pre-approved documents.
 
-    When original_filename is supplied (sanitized basename from the upload
-    endpoint), it is stored in source/filename metadata instead of the
-    server-generated UUID path.  Every chunk produced by this pipeline is
-    marked publication_allowed=False and review_state="pending_cultural_review"
-    so newly indexed content is blocked from public retrieval until an
-    administrator explicitly approves it.
+    confirmed must be True — the caller (route handler) is asserting that an
+    authenticated administrator has explicitly confirmed the document was
+    reviewed and approved before upload.  Passing confirmed=False raises
+    immediately so accidental or programmatic bypasses are caught at the
+    boundary closest to indexing.
+
+    Every chunk is stamped publication_allowed=True / review_state="approved"
+    unconditionally; loader metadata cannot override these values.
     """
+    if not confirmed:
+        raise ValueError(
+            "Upload approval confirmation required. An administrator must "
+            "confirm the document has been reviewed before it is indexed."
+        )
+
     try:
         processor = ProcessedData(
             file_paths=file_paths,
@@ -322,12 +332,11 @@ def upload_docs_pipeline(
         if not chunks:
             return []
 
-        # Gate newly uploaded content from public retrieval until approved.
-        # Hard-assign — not setdefault — so loader metadata can never accidentally
-        # leave a chunk with publication_allowed=True or no review_state.
+        # Hard-assign approval status on every chunk so loader metadata
+        # can never override the administrator's explicit confirmation.
         for chunk in chunks:
-            chunk.metadata["publication_allowed"] = False
-            chunk.metadata["review_state"] = "pending_cultural_review"
+            chunk.metadata["publication_allowed"] = True
+            chunk.metadata["review_state"] = "approved"
 
         v_store = VectorStoreManager()
         ids = v_store.add_documents(chunks)

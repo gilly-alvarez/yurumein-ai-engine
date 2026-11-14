@@ -12,7 +12,7 @@ import json
 import uuid
 import asyncio
 from ..utils.RAG_pipeline.workflow.workflow import create_workflow, run_workflow
-from ..utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+from ..utils.RAG_pipeline.workflow.nodes import _is_publication_restricted, _KNOWN_RESTRICTED_SOURCES
 from ..utils.RAG_pipeline.DB.session_manager import SessionManager
 from ..utils.RAG_pipeline.DB.knowledge_gap_manager import get_gap_manager
 from ..utils.RAG_pipeline.vectore_db.pgvector_db import upload_docs_pipeline, VectorStoreManager
@@ -457,8 +457,29 @@ async def archive_session(
 
 
 @router.post('/upload_docs', dependencies=[Depends(require_admin_key)])
-async def upload_docs_RAG(file: UploadFile = File(...)):
-    """Upload and process documents for RAG. Requires X-Admin-Key."""
+async def upload_docs_RAG(
+    file: UploadFile = File(...),
+    confirmed: Annotated[str, Form()] = "false",
+):
+    """Upload and index a pre-approved document.  Requires X-Admin-Key.
+
+    confirmed must equal "true" — the administrator is asserting the document
+    has already been reviewed for cultural accuracy, source reliability, and
+    publication appropriateness.  Missing or false confirmation → 422.
+
+    Documents whose filenames match a known permanently restricted source are
+    rejected regardless of confirmation status.
+    """
+    if confirmed.strip().lower() != "true":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Upload approval confirmation is required. The submitting "
+                "administrator must confirm the document has been reviewed "
+                "and approved for publication in Yurumein AI."
+            ),
+        )
+
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -469,15 +490,31 @@ async def upload_docs_RAG(file: UploadFile = File(...)):
             status_code=400,
             detail=f"Unsupported file type '{file_ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
+
+    # Strip directory separators — metadata only, never used for I/O.
+    safe_original_name = Path(file.filename).name
+
+    # Reject uploads whose filename matches a permanently restricted source.
+    # Indexing would succeed but every chunk would be blocked by the source-path
+    # guard in _is_publication_restricted, leaving unserveable content in the DB.
+    source_upper = safe_original_name.upper()
+    if any(pattern in source_upper for pattern in _KNOWN_RESTRICTED_SOURCES):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{safe_original_name}' matches a permanently restricted source "
+                f"({', '.join(_KNOWN_RESTRICTED_SOURCES)}) and cannot be indexed. "
+                "This content is blocked from all public retrieval regardless of "
+                "approval status. Contact the cultural review team for guidance."
+            ),
+        )
+
     CURRENT_DIR = Path(__file__).resolve().parent
     UPLOAD_DIR = CURRENT_DIR / ".." / "utils" / "RAG_pipeline" / "data" / "new_docs"
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    # Use a server-generated name so the client-supplied path cannot escape the upload directory.
+    # Server-generated UUID filename so the client path cannot escape the upload dir.
     safe_filename = f"{uuid.uuid4().hex}{file_ext}"
     file_path = str(UPLOAD_DIR / safe_filename)
-    # Strip any directory components from the original name — used for
-    # metadata only (source/filename fields in PGVector), never for I/O.
-    safe_original_name = Path(file.filename).name
 
     try:
         with open(file_path, "wb") as buffer:
@@ -485,25 +522,39 @@ async def upload_docs_RAG(file: UploadFile = File(...)):
 
         print(f"File saved: {file_path}")
 
-        upload_docs_pipeline(file_paths=[file_path], original_filename=safe_original_name)
+        ids = upload_docs_pipeline(
+            file_paths=[file_path],
+            original_filename=safe_original_name,
+            confirmed=True,
+        )
 
         if os.path.exists(file_path):
             os.remove(file_path)
 
+        if not ids:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No content could be extracted from the document. "
+                    "It may be empty, unreadable, or contain only unsupported content."
+                ),
+            )
 
         return {
             "status": "success",
             "filename": file.filename,
-            "message": "File successfully uploaded, processed, and vectorized."
+            "chunks_indexed": len(ids),
+            "message": "Document uploaded and approved for Yurumein AI.",
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-            except:
+            except Exception:
                 pass
-
         raise HTTPException(
             status_code=500,
             detail=f"Error processing file: {str(e)}"

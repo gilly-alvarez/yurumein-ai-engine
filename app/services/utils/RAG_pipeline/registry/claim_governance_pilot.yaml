@@ -1,0 +1,1287 @@
+# Yurumein AI — Claim Governance Pilot
+# Phase 3: Contested & Weak Claim Governance
+#
+# STATUS: PHASE 3 CLOSED — governance design complete; RP01–RP11 approved.
+#         Not runtime production logic. Phase 4 implementation pending.
+#
+# HOW TO READ THIS FILE:
+#   Each claim was extracted verbatim or closely paraphrased from ingested sources.
+#   "best_available_source" = the source with the highest domain_authority for
+#   this claim type, regardless of whether it supports or contradicts the claim.
+#   "recommended_response_behavior" = behavioral guidance only; not yet implemented.
+#
+# Created:    2026-08-10
+# Revised:    2026-08-10 (cross-source comparison added; P001/P002 production cases added)
+#             2026-08-10 (EV06 production verified; RP09/RP10/RP11 approved; Phase 3 closed)
+# Corpus:     Yurumein production RAG sources (6 sources, see source_registry.yaml)
+# Audit tool: Direct PDF inspection via pdftotext; LIBRO I and II read verbatim;
+#             nodes.py routing logic inspected; lexicon CSV queried for 'father'.
+# Language Overview: EV06 SATISFIED — owner queried production PGVector directly on VPS
+#   (2026-08-10); all 6 chunks confirmed present (pages 0–2); text inspected during audit.
+#   Source remains Tier U: authorship and provenance still unknown. RP08 still applies.
+#
+# DO NOT:
+#   - modify nodes.py, workflow.py, prompt.py, lexical_parser.py, lexicon.py
+#   - change PGVector, re-ingest, delete sources, alter source_registry.yaml
+#   - treat this file as runtime logic
+#   - deploy, commit, or push without owner approval
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# SECTION A: CLAIM MATRIX
+# 8 high-value claims selected from production RAG corpus
+# ---------------------------------------------------------------------------
+
+claims:
+
+  - claim_id: C001
+    claim_text: >
+      "The first Black Caribs were brought by Spanish ships in 1635 to be used as
+      slaves. After conflict during the voyage, some escaped and others shipwrecked
+      (naufragaron) in the waters of St. Vincent, where they were received by the
+      Red Caribs, natives of the island."
+    verbatim_source_excerpt: >
+      LIBRO GARIFUNA II (page 5):
+      "los primeros Caribes Negros fueron traídos por embarcaciones Españolas, en el
+      año de 1635 con finalidad de utilizarlos como esclavos... durante el transcurso
+      del viaje se formó una serie de trifulca y varios escaparon, otros naufragaron
+      en las aguas de la Isla de San Vicente, los que sobrevivieron fueron recibidos
+      con grata bienvenida por otra cultura denominada Caribes Rojos."
+
+      GARIFUNA LANGUAGE OVERVIEW (production chunk, owner-confirmed):
+      "The Garifuna people originated from a unique blending of West African
+      survivors of shipwrecks and Indigenous Arawak and Carib peoples on the island
+      of St. Vincent (Yurumein) in the 17th century."
+    domain: historical / ethnogenesis
+    sources_supporting:
+      - libro-garifuna-serie-ii
+      - garifuna-language-overview  # corroborates shipwreck mechanism; Tier U
+    sources_conflicting: []
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+    best_available_source: libro-garifuna-serie-ii
+    best_domain_authority: B  # historical domain, per source_registry
+    cross_source_comparison: >
+      AGREEMENT: Both sources use the shipwreck mechanism ("naufragaron" / "survivors
+      of shipwrecks"). Both place the arrival at St. Vincent (Yurumein). Both locate
+      the event in the 17th century (LIBRO II gives 1635; Language Overview says
+      "17th century" — consistent but less specific).
+      DISAGREEMENT: On the question of MIXING — the Language Overview says "unique
+      blending of West African... and Indigenous Arawak and Carib peoples," implying
+      mixing occurred IN St. Vincent. LIBRO II says "sin lograrse una mezcla" (no
+      mixing occurred in St. Vincent). See C002.
+      WEIGHT NOTE: Language Overview is Tier U (unknown provenance, authorship
+      unknown). Its corroboration of the shipwreck mechanism is evidential but cannot
+      be weighted against LIBRO II (Tier B). Full chunk content pending production
+      DB inspection.
+    evidence_strength: weak
+    # Revised from "weak / one source" to "weak / two sources, one Tier U."
+    # Shipwreck mechanism is now corroborated. 1635 specific date remains uncorroborated.
+    contested_status: weakly_supported
+    verification_status: unverified
+    external_verification_required: true
+    risk_if_stated_as_fact: HIGH
+    # 1635 date is still uncorroborated. Shipwreck mechanism is at least
+    # corroborated across two sources, but one is Tier U.
+    recommended_response_behavior: >
+      Cross-source corroborated but still weak. Shipwreck mechanism: "Available
+      sources describe West African ancestors of the Garífuna as survivors of
+      shipwrecks who arrived on the island of St. Vincent (Yurumein) in the 17th
+      century." The specific 1635 date is from one source only: attribute and hedge.
+      "One account places this in 1635, but this date comes from a single source
+      without citation."
+
+  - claim_id: C002
+    claim_text: >
+      "Black Caribs and Red Caribs lived together in St. Vincent for 162 years
+      WITHOUT intermarrying — explicitly contradicting what many historians and
+      writers about Garifuna culture claim."
+    verbatim_source_excerpt: >
+      LIBRO GARIFUNA II (page 5):
+      "Los Caribes Negros vivieron durante 162 años junto a los Caribes Rojos sin
+      lograrse una mezcla entre los dos pueblos como muchos historiadores y escritores
+      sobre la cultura garifuna afirman."
+
+      GARIFUNA LANGUAGE OVERVIEW (production chunk, owner-confirmed, CONTRADICTS):
+      "The Garifuna people originated from a unique blending of West African
+      survivors of shipwrecks and Indigenous Arawak and Carib peoples on the island
+      of St. Vincent (Yurumein) in the 17th century."
+    domain: historical / ethnogenesis
+    sources_supporting:
+      - libro-garifuna-serie-ii
+    sources_conflicting:
+      - garifuna-language-overview
+      # Language Overview says "unique blending... on the island of St. Vincent" —
+      # directly contradicts LIBRO II's "no mixing in St. Vincent" narrative.
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+    best_available_source: libro-garifuna-serie-ii
+    # Language Overview is Tier U — LIBRO II (Tier B historical) outranks it.
+    best_domain_authority: B
+    cross_source_comparison: >
+      DIRECT CONTRADICTION on mixing/blending:
+        LIBRO II: "sin lograrse una mezcla entre los dos pueblos" — no mixing in
+          St. Vincent. Mixing located in Guatemala after 1802.
+        LANGUAGE OVERVIEW: "unique blending of West African... and Indigenous Arawak
+          and Carib peoples on the island of St. Vincent" — mixing explicitly placed
+          IN St. Vincent.
+
+      ADDITIONAL INTERNAL CONTRADICTION within LIBRO II:
+        Page 5 (early): "sin lograrse una mezcla" — no mixing in St. Vincent.
+        Page 5 (later, same paragraph): "150 miembros de Caribes Negros y Caribes
+          Rojos mezclados entre si" — group described as "mixed with each other" by
+          the time of the 1802 Guatemala journey. If no mixing in St. Vincent and no
+          mixing in Roatán was mentioned, when did the mixing described on the same
+          page occur? LIBRO II does not resolve this.
+
+      WEIGHT: LIBRO II (Tier B) > Language Overview (Tier U) for authority, but
+      the Language Overview represents the mainstream narrative that LIBRO II's own
+      author acknowledges ("como muchos historiadores y escritores... afirman").
+      The corpus thus records both the community-authored counter-narrative AND the
+      mainstream narrative, from sources of different authority tiers.
+
+      CORPUS VERDICT: This claim is now CROSS-SOURCE CONTESTED (not just internally
+      contested). Two sources disagree. The corpus cannot resolve the dispute.
+    evidence_strength: insufficient
+    contested_status: contested
+    # UPDATED: Previously "contested" with only LIBRO II's internal acknowledgment.
+    # Now: CROSS-SOURCE CONTESTED — Language Overview explicitly contradicts.
+    # LIBRO II still holds the higher domain authority (Tier B vs Tier U).
+    verification_status: unverified
+    external_verification_required: true
+    risk_if_stated_as_fact: HIGH
+    recommended_response_behavior: >
+      Cross-source contested. MUST NOT state either version as fact.
+      Use RP03 (two-source disagreement) with RP06 (contested historiography):
+      "Sources in Yurumein's knowledge base present different accounts of this.
+      One source describes the Garífuna as originating from a 'unique blending'
+      of West African and Indigenous peoples in St. Vincent. A second source holds
+      that Black Caribs and Red Caribs coexisted in St. Vincent for 162 years
+      without intermarrying, with the author acknowledging this differs from what
+      'many historians' claim. The current knowledge base cannot resolve this
+      historiographical dispute, and external academic sources would be needed
+      for a definitive account."
+
+  - claim_id: C003
+    claim_text: >
+      "In 1797, Black Caribs were expelled from St. Vincent by a dominant new group
+      called 'gíyou' (now known as Afrodescendientes), said to be from England.
+      Red Caribs were forced to leave with them. Together they were transported on
+      ten ships to Roatán, Honduras."
+    verbatim_source_excerpt: >
+      "en 1797 los Caribes Negros fueron expulsados de la Isla de San Vicente por un
+      nuevo grupo predominante con un potencial económico llamado: gíyou ahora
+      conocidos como: Afrodescendientes que según se dice que son provenientes de
+      Inglaterra; luego de la expulsión... fueron trasladados a bordo de diez naves
+      asia la hisla de Roatán en Honduras C.A."
+      — LIBRO GARIFUNA II, page 5 (Seingü)
+    domain: historical
+    sources_supporting:
+      - libro-garifuna-serie-ii
+    sources_conflicting: []
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+      - garifuna-language-overview
+    best_available_source: libro-garifuna-serie-ii
+    best_domain_authority: B
+    evidence_strength: weak
+    contested_status: weakly_supported
+    # The 1797 date and Roatán destination are historically documented in mainstream
+    # accounts. However:
+    # (a) The characterizing of the expelling group as "gíyou/Afrodescendientes from
+    #     England" differs from the mainstream account that identifies British colonial
+    #     military forces (following the Anglo-Carib War 1795-1797) as responsible.
+    # (b) "según se dice" (it is said) is the author's own hedge — acknowledging
+    #     uncertainty about English origin of this group.
+    # (c) "diez naves" (ten ships) is a specific claim without citation.
+    verification_status: unverified
+    external_verification_required: true
+    risk_if_stated_as_fact: MEDIUM
+    # The 1797 year and Roatán destination have broader corroboration; the framing
+    # of who expelled them is the contested element.
+    recommended_response_behavior: >
+      Partially corroborated claim with a contested framing element. The 1797 date
+      and Roatán destination are broadly documented. The characterization of who
+      expelled the Garifuna should be presented with attribution and the source's
+      own hedge: "According to one account, the expulsion was carried out by a group
+      the source calls 'gíyou' (said to be from England). This framing has not been
+      independently verified by this corpus."
+
+  - claim_id: C004
+    claim_text: >
+      "On November 25, 1802, exactly 150 members of Black Caribs and Red Caribs —
+      by then mixed — undertook a journey led by Haitian Army Major Marcos Sánchez
+      Díaz and arrived on the Guatemalan Atlantic coast, later settling in Livingston
+      (then called La Buga), named after American Eduardo Livingston."
+    verbatim_source_excerpt: >
+      "exactamente el 25 de noviembre de 1802, como acto histórico 150 miembros de
+      Caribes Negros y Caribes Rojos mezclados entre si, emprendieron un viaje
+      encabezados por el Mayor del Ejercito Haitiano: Marcos Sánchez Díaz, arribaron
+      a la costa atlántica Guatemalteca estableciendose en pocos meses en Puerto
+      Barrios y que después emigraron a La Buga Hoy llamado Livingston en honor al
+      Norteamericano Eduardo Livingston."
+      — LIBRO GARIFUNA II, page 5 (Seingü)
+    domain: historical
+    sources_supporting:
+      - libro-garifuna-serie-ii
+    sources_conflicting: []
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+      - garifuna-language-overview
+    best_available_source: libro-garifuna-serie-ii
+    best_domain_authority: B
+    evidence_strength: weak
+    contested_status: weakly_supported
+    # Multiple highly specific claims stacked without citations:
+    # (a) Exact date: November 25, 1802
+    # (b) Exact count: exactly 150 members
+    # (c) Named leader: Marcos Sánchez Díaz, identified as "Mayor del Ejercito Haitiano"
+    # (d) Settlement sequence: Puerto Barrios → Livingston
+    # (e) Livingston named after "Norteamericano Eduardo Livingston"
+    # Internal contradiction: the author earlier asserted no mixing in St. Vincent,
+    # but here the group is "mezclados entre si" (mixed among themselves) by 1802.
+    # The "Haitian Army" attribution for Marcos Sánchez Díaz is unusual and requires
+    # verification — this is a specific and consequential historical claim.
+    verification_status: unverified
+    external_verification_required: true
+    risk_if_stated_as_fact: HIGH
+    # Several embedded precision claims (date, count, military rank/origin) without
+    # any citation. Particularly, the "Haitian Army" identification of Marcos Sánchez
+    # Díaz is consequential and cannot be verified from this corpus.
+    recommended_response_behavior: >
+      Weak claim with stacked precision. Attribute explicitly and hedge the specific
+      details: "According to Enríquez Bermúdez's account, a group of approximately
+      150 Garifuna arrived on the Guatemalan coast in late 1802, led by Marcos
+      Sánchez Díaz. The specific date, count, and Díaz's military affiliation are
+      stated without citation and cannot be verified by Yurumein's current sources."
+
+  - claim_id: C005
+    claim_text: >
+      "Garífuna is a hybrid language with the following composition: 45% Arawak,
+      25% Carib/Kanilla, 15% French, 10% English, and 5% Spanish technical terms."
+    verbatim_source_excerpt: >
+      "El habla garifuna es un idioma híbrido, Arahuaco su léxico comprende el 45%
+      de palabras de origen Arawuaco, 25% de Kanilla o Caribe, 15% del idioma francés,
+      10% del idioma Inglés y 5 vocablos técnicos Españoles."
+      — LIBRO GARIFUNA II, page 7 (Sedü)
+    domain: linguistic
+    sources_supporting:
+      - libro-garifuna-serie-ii
+    sources_conflicting: []
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+      - garifuna-language-overview
+    best_available_source: libro-garifuna-serie-ii
+    best_domain_authority: B
+    evidence_strength: weak
+    contested_status: weakly_supported
+    # The broad characterization of Garífuna as a hybrid language with Arawak and
+    # Carib roots is linguistically established. However:
+    # (a) The specific percentages (45%, 25%, 15%, 10%, 5%) are stated without any
+    #     methodology or citation — they are presented as established fact.
+    # (b) Linguistic percentage claims for lexical composition are methodologically
+    #     complex (depends on wordlist, counting methodology, what counts as a root).
+    # (c) "5 vocablos técnicos Españoles" (5 Spanish technical words) is almost
+    #     certainly an undercount — the DICCIONARIO alone has 469+ Spanish-rooted entries.
+    # (d) No other source in the corpus corroborates or disputes these percentages.
+    verification_status: unverified
+    external_verification_required: true
+    risk_if_stated_as_fact: MEDIUM
+    # The hybrid/Arawak-Carib nature of the language is accepted; the specific
+    # percentages carry false precision that can mislead users.
+    recommended_response_behavior: >
+      Weakly supported precision claim. The hybrid nature of Garífuna (Arawak and
+      Carib roots) is documented across sources. The specific percentages should
+      be attributed and hedged: "One account places the lexical composition at
+      approximately 45% Arawak, 25% Carib, 15% French, 10% English, and 5% Spanish.
+      These percentages are from a single source and have not been independently
+      verified. Linguistic composition figures depend heavily on methodology."
+
+  - claim_id: C006
+    claim_text: >
+      "The Garífuna language is spoken by: 98,000 in Honduras, 17,000 in Guatemala,
+      1,500 in Nicaragua, and 16,000 in Belize. Total Garifuna population: 1 million
+      people, of whom only 350,000 still speak the language."
+    verbatim_source_excerpt: >
+      "Este idioma es hablado en la costa atlántica de Honduras por 98,000 habitantes,
+      seguido de Guatemala por 17,000 especificamente por la mayoria quienes habitan
+      en Livingston Izabal... en Nicaragua por 1,500 y en Belice por 16,000. Según
+      estadísticas reales existen un millon de personas quienes pertenecen a esa cultura
+      y de ese número solo lo hablan 350,000 personas."
+      — LIBRO GARIFUNA II, page 7 (Sedü)
+    domain: demographic / statistical
+    sources_supporting:
+      - libro-garifuna-serie-ii
+    sources_conflicting: []
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+      - garifuna-language-overview
+    best_available_source: libro-garifuna-serie-ii
+    best_domain_authority: B
+    evidence_strength: insufficient
+    contested_status: weakly_supported
+    # "Según estadísticas reales" ("according to real statistics") — the source
+    # claims these are real statistics but cites no study, census, year, or methodology.
+    # No date is given for when these figures were measured.
+    # The book was written/compiled circa 2013-2015 with a 2020 digital edition;
+    # any figures from that period are now 10+ years old.
+    # The claim that only 350,000 of 1 million ethnic Garífuna speak the language
+    # implies a 65% language loss rate — consistent with the "60% customs lost" claim
+    # but mutually uncorroborated since both come from the same source.
+    verification_status: unverified
+    external_verification_required: true
+    risk_if_stated_as_fact: HIGH
+    # Presenting specific population and speaker counts without a citation date or
+    # source could lead users to treat outdated figures as current data — particularly
+    # harmful for language endangerment contexts.
+    recommended_response_behavior: >
+      Unsupported precision claim. Do not present specific counts as current fact.
+      "One source estimates approximately 350,000 active Garífuna speakers out of a
+      total ethnic population of around 1 million. These figures are drawn from a
+      single, undated source and should not be treated as current census data.
+      More recent demographic data would be needed for accurate figures."
+
+  - claim_id: C007
+    claim_text: >
+      "Garífuna dance and tribal practices were recognized as Patrimony of Humanity
+      in 1981." [INTERNAL CONTRADICTION: The same source later states the recognition
+      occurred on May 18, 2001, with UNESCO inscription in 2008.]
+    verbatim_source_excerpt: >
+      VERSION A (page 6, Sisi):
+      "La práctica y Danzas tribales Garifunas fueron consideradas como Patrimonio de
+      la Humanidad, en el año de 1981."
+
+      VERSION B (page 8, Wídü):
+      "El idioma garifuna, junto con la danza y su música de esta etnia fue proclamada
+      y declarada el 18 de Mayo de 2001 como: 'Obra Maestra del Patrimonio Oral y
+      Material de la Humanidad' e inscrita en el año de 2008 en la Lista Representativa
+      del Patrimonio Cultural de la Humanidad de la UNESCO."
+      — Both from LIBRO GARIFUNA II
+    domain: historical / cultural recognition
+    sources_supporting:
+      - libro-garifuna-serie-ii  # supports VERSION B (2001/2008) only
+    sources_conflicting:
+      - libro-garifuna-serie-ii  # also contains VERSION A (1981) — internal contradiction
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+      - garifuna-language-overview
+    best_available_source: libro-garifuna-serie-ii
+    best_domain_authority: B
+    evidence_strength: insufficient
+    contested_status: contested
+    # This is a DIRECT INTERNAL CONTRADICTION within a single source.
+    # The 1981 date is almost certainly an error: UNESCO's "Masterpieces of the Oral
+    # and Intangible Heritage of Humanity" program did not exist in 1981.
+    # Version B (May 18, 2001, inscribed 2008) is the internally consistent and
+    # externally verifiable claim.
+    # Version A (1981) appears on page 6 in a run-on sentence and may be a typo
+    # or copy-edit error. It should never be cited by Yurumein.
+    verification_status: partially_verifiable
+    # Version B (2001) can be verified against external UNESCO records.
+    external_verification_required: true
+    risk_if_stated_as_fact: HIGH
+    # Citing 1981 would be demonstrably wrong. Citing 2001 is likely correct but
+    # still needs external confirmation given the source quality.
+    recommended_response_behavior: >
+      Internal contradiction — cite only Version B. "Garífuna language, music, and
+      dance were proclaimed a UNESCO Masterpiece of the Oral and Intangible Heritage
+      of Humanity on May 18, 2001, and inscribed on the Representative List in 2008.
+      Note: one passage in the same source gives an inconsistent date of 1981, which
+      appears to be a transcription error." External verification against UNESCO
+      records is required before stating the 2001 date as definitive.
+
+  - claim_id: C008
+    claim_text: >
+      "Garífuna has gender-differentiated vocabulary: words used only by women derive
+      from Arawak, while words used only by men derive from Carib."
+    verbatim_source_excerpt: >
+      "en este idioma hay vocabulario que es usado sólo por mujeres y el que es
+      utilizado sólo por hombres. Esto sin embargo, no afecta a todo el vocabulario.
+      Los términos usados por los hombres provienen generalmente del idioma Caribe
+      mientras que el vocabulario usado por mujeres viene del idioma Arahuaco."
+      — LIBRO GARIFUNA II, page 7 (Sedü)
+    domain: linguistic
+    sources_supporting:
+      - libro-garifuna-serie-ii
+    sources_conflicting: []
+    sources_silent:
+      - diccionario-garifuna
+      - libro-garifuna-serie-i
+      - musical-instruments-dataset
+      - yurumein-lexicon-pilot
+      - garifuna-language-overview
+    best_available_source: libro-garifuna-serie-ii
+    best_domain_authority: B
+    evidence_strength: moderate
+    contested_status: supported
+    # Gender-differentiated vocabulary in Garífuna (Island Carib) is a well-documented
+    # linguistic phenomenon noted in the scholarly literature. The broad claim
+    # (women=Arawak, men=Carib origin) reflects the established sociolinguistic
+    # history of the language. The source also qualifies it: "no afecta a todo el
+    # vocabulario" (does not affect all vocabulary).
+    # The specific examples given (Ayí/Ayé, Hará/H, Ino/Hiwey, etc.) are vocabulary
+    # items requiring independent verification — the corpus cannot validate them.
+    # "provienen generalmente" (come generally) is appropriate hedging by the author.
+    verification_status: partially-verified
+    external_verification_required: true
+    risk_if_stated_as_fact: LOW-MEDIUM
+    # The general phenomenon is well-established. The specific word list examples
+    # require verification. Risk is in treating the characterization as complete.
+    recommended_response_behavior: >
+      Moderately supported claim with limited examples. Garífuna is documented to have
+      vocabulary associated with women's and men's speech patterns, with women's terms
+      tracing to Arawak and men's to Carib origins. "Available sources note that
+      Garífuna has vocabulary used primarily by women (Arawak-derived) and vocabulary
+      used primarily by men (Carib-derived), though this does not apply to the full
+      vocabulary. The specific word examples have not been independently verified."
+
+# ---------------------------------------------------------------------------
+# SECTION B: DISAGREEMENT TYPE CLASSIFICATION
+# ---------------------------------------------------------------------------
+
+disagreement_types:
+
+  - type_id: A
+    label: Direct contradiction
+    description: >
+      Two claims from the same or different sources cannot both be true simultaneously.
+    instances:
+      - claim_id: C007
+        explanation: >
+          LIBRO GARIFUNA II contains "1981" on page 6 and "May 18, 2001" on page 8
+          for the same UNESCO recognition event. Both appear in the same source;
+          one is almost certainly a transcription error.
+
+  - type_id: B
+    label: Different framing / interpretation
+    description: >
+      Sources present the same events or facts using different framing that implies
+      different significance or causation, without direct factual contradiction.
+    instances:
+      - claim_id: C003
+        explanation: >
+          The expulsion cause is framed as "Afrodescendientes from England" (Book II)
+          rather than British colonial military forces (mainstream account). The event
+          (1797 expulsion) is the same; the attribution of cause and agent differs.
+
+  - type_id: C
+    label: Different chronology / date
+    description: >
+      Sources give different specific dates or timelines for the same event.
+    instances:
+      - claim_id: C007
+        explanation: >
+          1981 vs. 2001 within the same source. (Also applies as Type A.)
+      - claim_id: C001
+        explanation: >
+          The 1635 date for first African contact with St. Vincent is unstated in other
+          sources — no corroborating or contradicting date exists in the corpus.
+
+  - type_id: D
+    label: Source-specific community perspective
+    description: >
+      A source presents a community-held interpretation of history or culture that
+      diverges from mainstream scholarly accounts. The source may acknowledge the
+      divergence. Not necessarily "wrong" — may represent important community voice.
+    instances:
+      - claim_id: C002
+        explanation: >
+          The author explicitly acknowledges that "many historians and writers"
+          hold a different view (mixing in St. Vincent) and positions his account
+          as a counter-narrative. This is a community-authored framing, not a
+          corroborated historical finding.
+      - claim_id: C004
+        explanation: >
+          The characterization of Marcos Sánchez Díaz as a "Haitian Army Major"
+          is a specific attribution that differs from other accounts. May reflect
+          a community-transmitted narrative not verifiable from this corpus.
+
+  - type_id: E
+    label: Unsupported precision
+    description: >
+      A claim states specific numbers, percentages, dates, or counts without citing
+      the source of that precision. The precision implies rigor that the sourcing
+      does not support.
+    instances:
+      - claim_id: C005
+        explanation: >
+          45%/25%/15%/10%/5% language composition percentages stated as fact without
+          methodology or citation.
+      - claim_id: C006
+        explanation: >
+          "98,000 / 17,000 / 1,500 / 16,000" speaker counts stated as "estadísticas
+          reales" without citation, study, or measurement year.
+      - claim_id: C004
+        explanation: >
+          "exactly 150 members," "November 25, 1802," "ten ships" — stacked precision
+          without citation.
+
+  - type_id: F
+    label: Generalization from limited evidence
+    description: >
+      A claim makes a broad statement that is supported only by limited examples or
+      a single narrow source, without acknowledging scope limitations.
+    instances:
+      - claim_id: C008
+        explanation: >
+          The gendered vocabulary claim is broadly supported linguistically, but the
+          source provides only a handful of examples. Treating the full corpus of
+          gendered vocabulary as documented would overgeneralize.
+      - claim_id: C001
+        explanation: >
+          The shipwreck/escape narrative is presented as "what history pages relate"
+          but is drawn from a single self-published source with no citations.
+
+# ---------------------------------------------------------------------------
+# SECTION C: CLAIM GOVERNANCE POLICY (PROPOSED — NOT YET IMPLEMENTED)
+# ---------------------------------------------------------------------------
+
+response_policy:
+
+  policy_version: "0.2-approved"
+  status: APPROVED (RP01–RP11) — governance policy complete; implementation deferred to Phase 4
+  applies_to: LLM responses generated from RAG-retrieved chunks
+
+  rules:
+
+    - rule_id: RP01
+      scenario: Strongly supported claim
+      definition: >
+        Claim is supported by multiple independent sources with domain_authority
+        >= B, or by one source with domain_authority A, with no conflicting sources.
+      behavior: >
+        State as established. Source attribution optional but preferred.
+        Example: "Garífuna is documented to have gender-differentiated vocabulary,
+        with women's terms associated with Arawak origins and men's with Carib."
+
+    - rule_id: RP02
+      scenario: Weak single-source claim
+      definition: >
+        Claim appears in only one source, that source has domain_authority <= B,
+        and no corroborating source exists. No conflicting source either.
+      behavior: >
+        State with source attribution and explicit scope limitation.
+        Example: "One available source records that... This has not been independently
+        corroborated in the current Yurumein knowledge base."
+
+    - rule_id: RP03
+      scenario: Two sources disagree
+      definition: >
+        Two or more sources in the corpus present mutually inconsistent versions
+        of the same claim.
+      behavior: >
+        Present both versions with attribution. Do not adjudicate which is correct.
+        Example: "Sources present different accounts of this. [Source A] states...
+        while [Source B] records... The current knowledge base cannot resolve
+        this discrepancy."
+      special_case: >
+        If the disagreement is an internal contradiction within one source (Type A),
+        cite only the version supported by external evidence where available,
+        and note the inconsistency.
+
+    - rule_id: RP04
+      scenario: Higher-domain-authority source vs. lower-domain-authority source
+      definition: >
+        Two sources conflict; one has higher domain_authority for the relevant domain.
+      behavior: >
+        Give preference to the higher-authority source but do not suppress the lower.
+        "The primary available source for this domain states... A secondary source
+        gives a different account..."
+      note: >
+        In the current corpus, DICCIONARIO (domain_authority lexical: A) supersedes
+        other sources for vocabulary. LIBRO II (historical: B) is the primary
+        available historical source — "primary available" does not mean "authoritative."
+
+    - rule_id: RP05
+      scenario: Community-authored source vs. general overview
+      definition: >
+        A community-authored source (e.g., LIBRO II, authored by Garífuna community
+        member from Livingston, Guatemala) presents content that may differ from
+        a general or external overview source.
+      behavior: >
+        Community perspective must not be suppressed. It should be attributed as
+        community voice with appropriate scope.
+        Example: "According to Enríquez Bermúdez, a Garífuna author from Livingston,
+        Guatemala..." — do not flatten to "historians say" or strip attribution.
+        Where the community account diverges from other accounts, use RP03.
+
+    - rule_id: RP06
+      scenario: Historical claim with contested historiography
+      definition: >
+        A claim about Garífuna history, ethnogenesis, or cultural origins where the
+        source acknowledges or implies that other historians disagree.
+      behavior: >
+        Always attribute. Never state as settled history. Acknowledge the existence
+        of alternative accounts.
+        Example: "This account presents [X] as the explanation for [Y]. Other
+        historiographical accounts differ, and the current knowledge base cannot
+        resolve the dispute."
+      applies_to: [C001, C002, C003, C004]
+
+    - rule_id: RP07
+      scenario: Precise number or statistic without citation
+      definition: >
+        A source states a specific numerical claim (population, percentage, date,
+        count) without citing the original study, census, or calculation methodology.
+      behavior: >
+        State with explicit uncertainty. Never present as current or confirmed data.
+        Example: "One source estimates [X]. This figure comes from a single undated
+        source and should be treated as an approximate reference, not confirmed data."
+      applies_to: [C005, C006, C004_embedded_numbers]
+
+    - rule_id: RP08
+      scenario: Unknown provenance source (Tier U)
+      definition: >
+        A retrieved chunk comes from a source with overall_tier: U or
+        verification_status: unverified (e.g., garifuna-language-overview).
+      behavior: >
+        Do not cite without explicit provenance warning.
+        Example: "Yurumein's knowledge base contains a document on this topic, but
+        its source and authorship have not been verified. The following should be
+        treated as unverified background information only: [content]."
+      note: >
+        garifuna-language-overview is the only Tier U source. EV06 satisfied —
+        all 6 chunks production-verified. Source remains Tier U (authorship unknown).
+
+    - rule_id: RP09
+      status: APPROVED (2026-08-10)
+      scenario: Term conflation from co-occurring retrieved chunks
+      definition: >
+        Retrieved chunk defines Term A. Query asks about Term B. Terms co-occur
+        in the corpus.
+      behavior: >
+        A definition for Term A must never be transferred to Term B merely because
+        the terms co-occur or are contextually related. A chunk about Dabuyaba does
+        not define Dügü, even if both appear in the same source documents. The
+        definition must explicitly name the queried term.
+      triggered_by: P001 (Dügü / Dabuyaba conflation)
+
+    - rule_id: RP10
+      status: APPROVED (2026-08-10)
+      scenario: Lexical request recognized but no structured lexicon entry found
+      definition: >
+        The lexical parser recognizes a translation request, but the structured
+        Yurumein lexicon contains no entry for the queried term.
+      behavior: >
+        Yurumein must distinguish "not found in the structured lexicon" from "no
+        Garífuna term exists." When the lexicon returns no entry, Yurumein may
+        search approved language sources as secondary evidence. The response must
+        not imply the term has no Garífuna equivalent solely because the lexicon
+        is incomplete.
+      implementation_note: >
+        The specific retrieval technique (query rewrite, fallback path logic) is a
+        Phase 4 implementation decision. This rule governs the behavioral outcome only.
+      triggered_by: P002 (father routing divergence)
+
+    - rule_id: RP11
+      status: APPROVED (2026-08-10)
+      scenario: Intra-source ambiguity — authoritative source gives multiple or conflicting
+        classifications for the same entity
+      definition: >
+        An authoritative source classifies or describes the same entity under more
+        than one category, or provides contradictory descriptions within the same
+        document.
+      behavior: >
+        Yurumein must preserve and disclose the ambiguity rather than silently resolving
+        it in favor of one classification. Present both descriptions with attribution.
+        Do not synthesize a single answer that papers over the source's own inconsistency.
+        Example (Dügü): "Available sources describe Dügü both as an ancestral ceremony
+        and as a traditional dance form. The source does not resolve whether these are
+        distinct or overlapping."
+      triggered_by: P001 (Dügü listed as both ritual and dance in LIBRO II)
+
+# ---------------------------------------------------------------------------
+# SECTION D: STEP 5 PILOT — GARÍFUNA ORIGIN NARRATIVE
+# Mandated: compare Garifuna Language Overview vs LIBRO GARIFUNA II
+# ---------------------------------------------------------------------------
+
+pilot_case_origin_narrative:
+
+  status: CROSS-SOURCE COMPARISON COMPLETED — EV06 SATISFIED (2026-08-10)
+  verification_note: >
+    Owner queried production PGVector directly on VPS (2026-08-10). All 6 chunks
+    confirmed present across pages 0–2. Complete chunk text inspected during audit.
+    The cross-source comparison for C001/C002 (shipwreck corroboration, mixing
+    contradiction) stands as established. Full-chunk inspection did not surface
+    additional contested claims beyond those already recorded in C001–C008.
+    Source remains Tier U: authorship and provenance still unknown. RP08 still applies.
+
+  libro_garifuna_ii_origin_account:
+    source: libro-garifuna-serie-ii
+    overall_tier: B
+    domain_authority_historical: B
+    summary: >
+      LIBRO II presents a detailed origin narrative (pages 5-8) covering:
+      (1) 1635: Black Caribs brought by Spanish ships as slaves; escaped/shipwrecked
+          at St. Vincent; received by Red Caribs.
+      (2) 162 years of cohabitation WITHOUT intermarriage — author explicitly disputes
+          the mainstream mixing narrative.
+      (3) 1797: Expelled to Roatán on 10 ships by "gíyou / Afrodescendientes from
+          England."
+      (4) 1802: 150 members, led by Marcos Sánchez Díaz (Haitian Army), arrive in
+          Guatemala; mixing happened AFTER arrival in Guatemala.
+      (5) UNESCO recognition: INTERNAL CONTRADICTION — "1981" (page 6) vs
+          "May 18, 2001 / inscribed 2008" (page 8).
+    key_contested_positions:
+      - No mixing in St. Vincent (disputed by mainstream historiography,
+        acknowledged as disputed by the author himself)
+      - Expellers characterized as "Afrodescendientes from England" rather than
+        British colonial military forces
+      - Mixing framed as occurring in Guatemala post-1802 rather than in St. Vincent
+      - 1981 UNESCO date (appears to be an error; 2001 is internally consistent)
+    source_quality_flags:
+      - Single-author, self-published, no bibliography or citations in origin section
+      - Author acknowledges counter-narratives exist but disputes them without citing
+        supporting evidence
+      - Internal contradiction on UNESCO date undermines editorial reliability
+
+  garifuna_language_overview_comparison:
+    status: PRODUCTION VERIFIED — all 6 chunks confirmed (pages 0–2, 2026-08-10)
+    source: garifuna-language-overview
+    overall_tier: U
+    confirmed_chunk_text: >
+      "The Garifuna people originated from a unique blending of West African
+      survivors of shipwrecks and Indigenous Arawak and Carib peoples on the island
+      of St. Vincent (Yurumein) in the 17th century."
+      (Source: owner-confirmed production PGVector chunk content)
+    cross_source_findings:
+      c001_shipwreck_narrative:
+        verdict: CORROBORATED
+        explanation: >
+          Language Overview: "West African survivors of shipwrecks" — uses shipwreck
+          mechanism. LIBRO II: "otros naufragaron en las aguas de la Isla de San
+          Vicente" — same mechanism. Both sources agree on the shipwreck origin.
+          The Language Overview is Tier U; corroboration raises confidence modestly
+          but does not constitute independent scholarly verification.
+      c002_mixing_in_st_vincent:
+        verdict: DIRECTLY CONTRADICTED
+        explanation: >
+          Language Overview: "unique blending of West African... and Indigenous
+          Arawak and Carib peoples ON THE ISLAND OF ST. VINCENT" — mixing is
+          explicitly placed at St. Vincent.
+          LIBRO II: "sin lograrse una mezcla entre los dos pueblos" — explicitly
+          states no mixing occurred. LIBRO II further contradicts its own account
+          by describing the 1802 group as "mezclados entre si" without explaining
+          when the mixing occurred.
+          VERDICT: This is now a confirmed two-source disagreement. C002 is
+          CROSS-SOURCE CONTESTED with one Tier B and one Tier U source in conflict.
+      language_and_chronology:
+        verdict: BROADLY CONSISTENT
+        explanation: >
+          Language Overview: "17th century" — consistent with LIBRO II's 1635 date
+          (also 17th century). The Language Overview does not give a specific year.
+      remaining_questions_from_full_6_chunks: >
+        EV06 SATISFIED (2026-08-10): Production DB query completed. All 6 chunks
+        inspected. Full inspection did not surface additional contested claims
+        beyond those already captured in C001–C008.
+    required_action: COMPLETED — EV06 SATISFIED (2026-08-10)
+    production_verification: >
+      Owner queried production PGVector on VPS. All 6 expected chunks confirmed
+      across pages 0–2. Text inspected during audit. No additional contested claims
+      surfaced beyond C001–C008. RP08 still applies: source remains Tier U
+      (authorship/provenance unknown).
+
+  shipwreck_narrative_assessment:
+    claim: >
+      African ancestors of the Garifuna arrived in St. Vincent following a shipwreck
+      or forced escape from a Spanish slave voyage.
+    corpus_verdict: WEAKLY_SUPPORTED — single source (LIBRO II), no citation
+    internal_flag: >
+      LIBRO II uses "naufragaron" (shipwrecked) for some and "escaparon" (escaped)
+      for others — these are different mechanisms, and both are stated simultaneously.
+      The narrative is internally ambiguous about HOW Africans arrived in St. Vincent.
+    unresolvable_from_this_corpus: true
+    external_verification_required: true
+
+  st_vincent_chronology_assessment:
+    dates_in_corpus:
+      - event: "First Africans arrive in St. Vincent"
+        date: 1635
+        source: libro-garifuna-serie-ii
+        citation_in_source: none
+      - event: "Expulsion from St. Vincent"
+        date: 1797
+        source: libro-garifuna-serie-ii
+        citation_in_source: none
+      - event: "Arrival in Guatemala"
+        date: "November 25, 1802"
+        source: libro-garifuna-serie-ii
+        citation_in_source: none
+    corpus_verdict: >
+      The St. Vincent chronology (1635-1797) and Guatemala arrival (1802) are stated
+      with specific dates in a single Tier B historical source with no citations.
+      No other source in the corpus corroborates or disputes these specific dates.
+      External verification required before presenting as established chronology.
+
+# ---------------------------------------------------------------------------
+# SECTION E: CLAIMS REQUIRING EXTERNAL VERIFICATION
+# ---------------------------------------------------------------------------
+
+external_verification_required:
+
+  priority: HIGH
+  note: >
+    Do not perform this research as part of this task.
+    This list is for future phases — academic historiography, institutional sources,
+    community oral/history authorities, linguistic scholarship.
+
+  items:
+
+    - item_id: EV01
+      claim_ids: [C001, C002, C003, C004]
+      topic: Garífuna origin narrative and St. Vincent chronology
+      research_against:
+        - Academic historiography on Black Caribs / Garinagu (e.g., Nancie Gonzalez,
+          Joseph Palacio, Mark Anderson)
+        - Official institutional sources (UNESCO, national archives of Honduras,
+          Belize, Guatemala)
+        - Community oral history authorities (CONPAH, OFRANEH, SATIIM)
+      key_questions:
+        - What is the accepted date range for African presence in St. Vincent?
+        - What is the scholarly consensus on mixing/non-mixing in St. Vincent?
+        - Who expelled the Garinagu in 1797: British military or Afrodescendientes?
+        - Is "Marcos Sánchez Díaz / Haitian Army" documented in historical records?
+        - What is the documented arrival date(s) in Guatemala?
+
+    - item_id: EV02
+      claim_ids: [C005]
+      topic: Language composition percentages
+      research_against:
+        - Linguistic scholarship on Island Carib / Garífuna (e.g., Hoff 1968,
+          Taylor 1951, 1977)
+        - UNESCO language documentation reports
+      key_questions:
+        - What methodology do linguists use to determine lexical composition?
+        - Do accepted linguistic sources give percentages comparable to 45/25/15/10/5?
+        - Is "5 Spanish technical words" a recognized characterization?
+
+    - item_id: EV03
+      claim_ids: [C006]
+      topic: Speaker statistics and demographic data
+      research_against:
+        - National census data (Honduras, Guatemala, Belize, Nicaragua) with dates
+        - UNESCO Atlas of the World's Languages in Danger
+        - IWGIA (International Work Group for Indigenous Affairs) reports
+      key_questions:
+        - What year were the stated figures (98K/17K/1.5K/16K) measured?
+        - What is the current (post-2020) speaker count?
+        - Is the "1 million ethnic, 350K speakers" figure corroborated?
+
+    - item_id: EV04
+      claim_ids: [C007]
+      topic: UNESCO recognition date (2001 vs. 1981)
+      research_against:
+        - UNESCO official records (proclamation May 18, 2001; inscription 2008)
+      key_questions:
+        - Confirm the 2001 proclamation date and 2008 inscription date
+        - Determine origin of the "1981" error in LIBRO II
+
+    - item_id: EV05
+      claim_ids: [C008]
+      topic: Gender-differentiated vocabulary in Garífuna
+      research_against:
+        - Linguistic scholarship (Taylor 1951 "Sex Affiliation and its Cultural Background";
+          Hoff 1968; Munro 2000)
+      key_questions:
+        - Do accepted linguistic sources confirm women's=Arawak / men's=Carib split?
+        - Are the specific example words (Ayí/Ayé, etc.) documented in linguistic
+          literature?
+
+    - item_id: EV06
+      status: COMPLETE (2026-08-10)
+      topic: Garifuna Language Overview — full chunk reconstruction
+      resolution: >
+        Owner queried production PGVector directly on VPS. All 6 expected chunks
+        confirmed present (pages 0–2). Complete chunk text inspected during audit.
+        Full inspection found no additional contested claims beyond those already
+        recorded in C001–C008. Source remains Tier U (authorship unknown).
+        RP08 still applies.
+
+# ---------------------------------------------------------------------------
+# SECTION G: PRODUCTION CASES — EVIDENCE GOVERNANCE FAILURES
+# Two cases derived from observed production chatbot behavior.
+# These are governance audit findings, not implementation tasks.
+# ---------------------------------------------------------------------------
+
+production_cases:
+
+  - case_id: P001
+    title: "Dügü — Definition, Location, and Confusion with Dabuyaba"
+    production_question: "What is the Dügü?"
+    production_behavior_reported: >
+      Chatbot answered that Dügü refers to a "ceremonial center" and used
+      "Dabuyaba" as supporting evidence.
+    governance_failure_type:
+      - RELEVANT ≠ SUPPORTS CLAIM
+      - SOURCE MENTION ≠ DEFINITION
+      - MODEL INFERENCE ≠ SOURCE FACT
+
+    corpus_evidence:
+      from_libro_garifuna_ii:
+
+        - location: "Page 6, Sisi — ritual list"
+          verbatim: >
+            "también se realizan actos y ritos a ellos o sea a aquellos quienes han
+            partido a otra vida y entre los ritos más relevantes y practicados podemos
+            mencionar: El Chugu, el Dÿgÿ, Abeimahani, Arumahani, ÿnñurahani y otras más."
+          interpretation: Dügü is a RITUAL/CEREMONY in the list of ancestral practices.
+
+        - location: "Page 6, Sisi — dance list"
+          verbatim: >
+            "sus danzas figuran: El Hüngünhügü, Dÿgÿ, Arumahani y otros."
+          interpretation: >
+            Dügü is also listed as a DANCE. The same source categorizes it under
+            both rituals and dances — ambiguity within LIBRO II itself.
+
+        - location: "Houses section (Tipos de Casas Utilizados por los Garifunas)"
+          verbatim: >
+            "Casa en donde se realiza ceremonia ancestral Dügÿ,    Gayunari
+             Casa en donde se realiza ceremonia ancestral Chugu,   Dabuyaba"
+          interpretation: >
+            CRITICAL: The house for the Dügü ceremony is called GAYUNARI.
+            The house for the Chugu ceremony is called DABUYABA.
+            Dabuyaba ≠ Dügü. Dabuyaba is associated with CHUGU, not Dügü.
+
+        - location: "Vocabulary section (monosyllabic/short words exercise)"
+          verbatim: "dabuyaba = centro ceremonial garífuna"
+          interpretation: >
+            The vocabulary section defines Dabuyaba generically as "Garífuna
+            ceremonial center" without specifying which ceremony. This generic
+            definition is the likely source of the production error.
+
+      from_libro_garifuna_serie_i:
+        - location: "Monosyllabic words section"
+          verbatim: "Dabuyaba / Dabuyaba / Centro ceremonial garifuna"
+          interpretation: >
+            LIBRO SERIE I also defines Dabuyaba as "ceremonial center" without
+            ceremony-specific context. Neither Book supports using "Dabuyaba" as
+            a definition or synonym for "Dügü."
+
+    governance_analysis: >
+      What the production RAG likely retrieved: a chunk containing "dabuyaba =
+      centro ceremonial garífuna" from LIBRO I or II vocabulary sections. This
+      chunk is RELEVANT to a query about Garífuna ceremonies but does NOT define
+      Dügü. The model then generated "Dügü is a ceremonial center" by conflating
+      the retrieved term with the queried term.
+
+      Failure classification:
+        RELEVANT ≠ SUPPORTS CLAIM: The chunk about Dabuyaba is relevant to Garífuna
+          cultural practices but does not support the claim that Dügü is a ceremonial
+          center.
+        SOURCE MENTION ≠ DEFINITION: Dabuyaba and Dügü both appear in the source
+          documents. Their co-presence does not make them synonymous.
+        MODEL INFERENCE ≠ SOURCE FACT: No source defines Dügü as a ceremonial center.
+          The model inferred this by associating the retrieved "ceremonial center"
+          definition with the queried term "Dügü."
+
+      WHAT THE SOURCES ACTUALLY SAY:
+        Dügü = an ancestral ceremony (LIBRO II, ritual list)
+        Dügü = also a dance (LIBRO II, dance list) — intra-source ambiguity
+        Gayunari = the house/building where the Dügü ceremony is performed
+        Dabuyaba = the house/building where the CHUGU ceremony is performed
+          (also generically labeled "ceremonial center" in vocabulary sections)
+
+      INTRA-SOURCE AMBIGUITY NOTE: LIBRO II lists Dügü under BOTH rituals and dances.
+      The corpus does not fully resolve whether Dügü is primarily a ceremony, a dance,
+      or a ceremony that includes dance elements. This ambiguity should be reflected
+      in any response about Dügü.
+
+    risk: HIGH
+    # Presenting Dügü as a "ceremonial center" (a PLACE) instead of a ceremony
+    # (a PRACTICE) fundamentally mischaracterizes a sacred ancestral practice.
+    # This is a high-consequence cultural accuracy failure.
+
+    recommended_response_behavior: >
+      Cite sources precisely. Do not conflate Dabuyaba with Dügü.
+      "The Dügü is described in available sources as an ancestral ceremony and a
+      traditional dance, performed as part of Garífuna spiritual practice. The
+      ceremonial building associated with the Dügü is called the Gayunari. The
+      Dabuyaba is a different ceremonial structure, associated with the Chugu
+      ceremony, not the Dügü." Note: if the source ambiguity between ceremony and
+      dance cannot be resolved, acknowledge it: "Available sources describe Dügü
+      both as a ritual and as a dance form."
+
+    governance_rules_triggered: [RP02, RP04]
+    approved_rule: >
+      RP09 (APPROVED 2026-08-10): TERM CONFLATION — When a retrieved chunk defines
+      Term A and the query asks about Term B, do not use Term A's definition for
+      Term B, even if A and B appear in related source contexts. Require the
+      definition to explicitly name the queried term.
+
+  - case_id: P002
+    title: "Father — Routing Divergence and Authority Path Inconsistency"
+    production_questions:
+      - question_a: "How do you say father in garifuna"
+        response_a: "The available documents do not provide enough information..."
+      - question_b: "How do you say father??"
+        response_b: "The word for 'father' in Garifuna is 'Pa.'"
+    governance_failure_type:
+      - ROUTING DIVERGENCE — semantically equivalent queries take different authority paths
+      - LEXICON MISS + RAG SILENT PATH produces "no information" response
+      - RAG-ONLY PATH produces answer with documentary evidence from Tier B source
+
+    routing_analysis:
+      from_nodes_py: nodes.py:231-248 global_retrieval_process()
+      query_a_path: >
+        1. parse_lexical_request("How do you say father in garifuna") → MATCHES
+           pattern "how_do_you_say", term="father", language="english"
+        2. YurumeinLexicon().lookup("father", "english") → 0 results
+           ("father" not in yurumein_lexicon_469.csv — lexicon covers A–An only)
+        3. if rows: block is SKIPPED (empty list is falsy)
+        4. Falls through to: _vector_retrieve(query="How do you say father in garifuna")
+        5. RAG query = full sentence including "in garifuna"
+        6. Production result: "not enough information" — RAG did not surface "Pa" chunk
+      query_b_path: >
+        1. parse_lexical_request("How do you say father??") → NO MATCH
+           (pattern requires "in gar[ií]funa\b" suffix; "??" terminates early)
+        2. Falls directly to: _vector_retrieve(query="How do you say father??")
+        3. RAG query = "How do you say father??" — no "garifuna" signal in query
+        4. Production result: "Pa" — RAG surfaced relevant chunk
+
+    documentary_evidence_for_pa:
+      from_libro_garifuna_serie_i:
+        location: "Monosyllabic words section, page 53"
+        verbatim: >
+          "PALABRAS MONOSILABAS EN IDIOMA GARIFUNA
+           Pa    Pa (Papá)"
+        note: >
+          "Pa" is listed as the Garífuna monosyllabic word for "Pa (Papá/father)."
+          This appears in a vocabulary table in LIBRO SERIE I (Tier B overall,
+          lexical Tier C). The word "Pa" has documentary support in the corpus.
+      from_libro_garifuna_serie_ii:
+        location: "Short words section, page 52-53"
+        verbatim: "Pa / Pa (Papá) — appears in same monosyllabic vocabulary list"
+        note: >
+          Same vocabulary item appears in LIBRO II. The "Pa = father/Papá" pairing
+          is documented in two sources.
+      lexicon_status: >
+        "father" is NOT in yurumein_lexicon_469.csv (lexicon covers A–An pilot only).
+        spanish "padre" is also not in the lexicon CSV.
+
+    governance_analysis: >
+      The answer "Pa" appears to be documentarily correct — it IS in the corpus
+      (LIBRO I and LIBRO II, Tier B sources, lexical Tier C). This is not a case
+      where RAG produced a hallucinated answer. The answer has source backing.
+
+      THE GOVERNANCE FAILURE is in the routing, not the answer:
+        (a) Query A takes the lexical path, which correctly identifies this as a
+            translation request, correctly looks up "father" in the lexicon,
+            correctly finds nothing (lexicon is incomplete), but then falls through
+            to RAG with the full query string "How do you say father in garifuna."
+            The RAG query includes "in garifuna" which may steer vector similarity
+            toward language-description chunks rather than vocabulary chunks.
+        (b) Query B bypasses the lexical path entirely (different phrasing) and
+            the shorter RAG query "How do you say father??" may retrieve vocabulary
+            chunks more effectively.
+        (c) The user's INTENT is identical in both cases. The path taken determines
+            the answer quality.
+
+      CRITICAL ROUTING GAP: When the lexical parser matches but lexicon returns 0
+      results, nodes.py falls through to RAG with the FULL ORIGINAL QUERY (line 241).
+      It does not use the EXTRACTED TERM ("father") as the RAG query. A targeted
+      RAG query on just "father" or "padre" would likely have retrieved the "Pa"
+      chunk in both cases.
+
+    additional_gap: >
+      The lexicon covers only A–An (469 entries). Common basic vocabulary like
+      "father/padre" (Pa) is absent from the lexicon entirely. This means all
+      "father"-type queries that DO match the lexical parser will silently miss
+      the lexicon and fall to RAG — without any indication to the user that the
+      lexicon was checked and found incomplete rather than the word not existing.
+
+    risk: MEDIUM-HIGH
+    # "No information" response to a valid translation query that has a documented
+    # answer in the corpus is a user trust failure. The user is likely to assume
+    # the information doesn't exist in Garífuna rather than that the system had
+    # a routing issue.
+
+    recommended_response_behavior: >
+      This is a routing/implementation finding, not a content dispute.
+      Governance note: When lexical parser matches but lexicon returns 0 results,
+      the system should either:
+        (a) Fall through to RAG with the EXTRACTED TERM (not full query), OR
+        (b) Surface a "not in structured lexicon, checking broader sources" message
+            before going to RAG, OR
+        (c) Allow the LLM to note explicitly: "This word is not in our structured
+            Garífuna lexicon. Based on available documents..."
+      Until routing is fixed, "father" queries that use the canonical pattern may
+      fail while equivalent non-canonical phrasings succeed.
+
+    governance_rules_triggered: [RP02]
+    approved_rule: >
+      RP10 (APPROVED 2026-08-10): LEXICON MISS GOVERNANCE — When a lexical request
+      is recognized but the structured lexicon contains no entry, Yurumein must
+      distinguish "not found in the structured lexicon" from "no Garífuna term exists."
+      It may search approved language sources as secondary evidence. The specific
+      retrieval technique is a Phase 4 implementation decision; this rule governs
+      the behavioral outcome only.
+
+# ---------------------------------------------------------------------------
+# SECTION H: REVISED POLICY CHECK — RP01-RP08 STATUS AFTER PRODUCTION CASES
+# ---------------------------------------------------------------------------
+
+revised_policy_check:
+
+  rp01_through_rp08_still_hold: true
+  notes: >
+    RP01-RP08 remain valid as stated. Production cases P001 and P002 expose two
+    additional governance gaps not covered by the original eight rules.
+
+  new_rules_approved:
+
+    - rule_id: RP09
+      status: APPROVED (2026-08-10)
+      scenario: Term conflation from co-occurring retrieved chunks
+      definition: >
+        Retrieved chunk defines Term A. Query asks about Term B. Terms co-occur
+        in the corpus. Model produces definition of Term B using Term A's definition.
+      behavior: >
+        A definition for Term A must never be transferred to Term B merely because
+        the terms co-occur or are contextually related. A chunk about Dabuyaba does
+        not define Dügü, even if both appear in the same source documents.
+      triggered_by: P001 (Dügü / Dabuyaba conflation)
+
+    - rule_id: RP10
+      status: APPROVED (2026-08-10)
+      scenario: Lexical request recognized but no structured lexicon entry found
+      definition: >
+        The lexical parser recognizes a translation request, but the structured
+        Yurumein lexicon contains no entry for the queried term.
+      behavior: >
+        Yurumein must distinguish "not found in the structured lexicon" from "no
+        Garífuna term exists." When the lexicon returns no entry, Yurumein may
+        search approved language sources as secondary evidence. The response must
+        not imply the term has no Garífuna equivalent solely because the lexicon
+        is incomplete.
+      implementation_note: >
+        The specific retrieval technique (query rewrite, fallback path logic) is a
+        Phase 4 implementation decision. This rule governs the behavioral outcome only.
+      triggered_by: P002 (father routing divergence)
+
+    - rule_id: RP11
+      status: APPROVED (2026-08-10)
+      scenario: Intra-source ambiguity — same source gives multiple or conflicting
+        classifications for the same entity
+      definition: >
+        An authoritative source classifies or describes the same entity under more
+        than one category, or provides contradictory descriptions within the same
+        document.
+      behavior: >
+        Yurumein must preserve and disclose the ambiguity rather than silently
+        resolving it. Present both descriptions with attribution. Do not synthesize
+        a single answer that papers over the source's own inconsistency.
+      triggered_by: P001 (Dügü listed as both ritual and dance in LIBRO II)
+
+# ---------------------------------------------------------------------------
+# SECTION D: STEP 5 PILOT — GARÍFUNA ORIGIN NARRATIVE (REVISED)
+# ---------------------------------------------------------------------------
+
+storage_recommendation:
+
+  recommended: YAML file (this file)
+  rationale: >
+    At this stage, lean governance design: a YAML file in the existing registry
+    directory alongside source_registry.yaml is the right choice because:
+    (1) No new infrastructure required — same format as source_registry.yaml
+    (2) Version-controllable alongside source definitions
+    (3) Human-readable for owner review
+    (4) Easily converted to a DB schema when retrieval governance is implemented
+    Rejected alternatives:
+    - Markdown note: less structured for future automated policy lookup
+    - PostgreSQL table: premature — no runtime logic exists yet; migration before
+      policy design wastes effort and creates schema debt
+  future_path: >
+    When source-aware retrieval is implemented in nodes.py/workflow.py, the
+    claim_id, contested_status, and recommended_response_behavior fields in this
+    file can seed a PostgreSQL claim_governance table. The YAML is designed with
+    that migration in mind.
+  file_location: >
+    app/services/utils/RAG_pipeline/registry/claim_governance_pilot.yaml
+  mark_as: PILOT — governance design only, not runtime production logic
+
+# ---------------------------------------------------------------------------
+# SECTION I: PHASE 3 CLOSURE
+# ---------------------------------------------------------------------------
+
+phase_3_closure:
+
+  phase: "Phase 3 — Contested / Weak Claim Governance"
+  status: CLOSED
+  closed_date: 2026-08-10
+
+  completed_deliverables:
+    - "8 high-value claims extracted and documented (C001–C008)"
+    - "6-type disagreement taxonomy built (Type A–F)"
+    - "11 governance rules approved (RP01–RP11)"
+    - "2 production cases audited (P001 Dügü conflation, P002 Father routing)"
+    - "Cross-source comparison completed (LIBRO II vs. Garifuna Language Overview)"
+    - "EV06 satisfied — all 6 Language Overview chunks production-verified (pages 0–2)"
+
+  approved_governance_rules:
+    - RP01  # Strongly supported claim
+    - RP02  # Weak single-source claim
+    - RP03  # Two sources disagree
+    - RP04  # Higher-authority source vs. lower-authority source
+    - RP05  # Community-authored source vs. general overview
+    - RP06  # Historical claim with contested historiography
+    - RP07  # Precise number or statistic without citation
+    - RP08  # Unknown provenance source (Tier U)
+    - RP09  # Term conflation from co-occurring retrieved chunks
+    - RP10  # Lexical request recognized but no structured lexicon entry found
+    - RP11  # Intra-source ambiguity — source gives multiple/conflicting classifications
+
+  unresolved_evidence_items:
+    - item_id: EV01
+      topic: "Garífuna origin narrative — external academic verification"
+      status: OPEN — deferred; not blocking Phase 4
+    - item_id: EV02
+      topic: "Language composition percentages — linguistic scholarship"
+      status: OPEN — deferred; not blocking Phase 4
+    - item_id: EV03
+      topic: "Speaker statistics and demographic data — census sources"
+      status: OPEN — deferred; not blocking Phase 4
+    - item_id: EV04
+      topic: "UNESCO recognition date (2001 vs. 1981) — external institutional verification required"
+      status: OPEN — CONTESTED; neither date declared correct from corpus alone.
+        Both dates appear in LIBRO GARIFUNA II (internal contradiction, Type A).
+        RP03 requires presenting the disagreement, not adjudicating it.
+        External verification against UNESCO records required before stating either
+        date as established fact. The 1981 date is suspected to be a transcription
+        error, but suspicion is not corpus evidence.
+    - item_id: EV05
+      topic: "Gender-differentiated vocabulary — linguistic scholarship"
+      status: OPEN — deferred; not blocking Phase 4
+    - item_id: EV06
+      topic: "Garifuna Language Overview — full chunk reconstruction"
+      status: COMPLETE (2026-08-10)
+
+  notes: >
+    EV01–EV05 require external academic or institutional sources not available in
+    the Yurumein corpus. They are open governance items and do not block Phase 4.
+    Phase 3 is closed because governance design is complete and all rules are
+    approved. Implementation begins in Phase 4.
+
+# ---------------------------------------------------------------------------
+# END OF PILOT DOCUMENT
+# ---------------------------------------------------------------------------

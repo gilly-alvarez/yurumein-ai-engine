@@ -359,6 +359,7 @@ class TestUploadDocsAuth:
                 "/upload_docs",
                 headers={"X-Admin-Key": ADMIN_KEY},
                 files={"file": ("evil.py", io.BytesIO(b"import os"), "text/plain")},
+                data={"confirmed": "true"},
             )
         assert resp.status_code == 400
         assert "Unsupported file type" in resp.json()["detail"]
@@ -370,114 +371,142 @@ class TestUploadDocsAuth:
 
 class TestUploadDocsAuthorized:
 
-    def _do_upload(self, filename: str, content: bytes = b"test content") -> tuple:
-        """Run an authorized upload; return (response, pipeline_call_args)."""
-        pipeline_calls = []
+    def _do_upload(
+        self,
+        filename: str,
+        content: bytes = b"test content",
+        confirmed: str = "true",
+        ids: list = None,
+    ) -> tuple:
+        """Run an authorized upload; return (response, pipeline_kwargs_list)."""
+        captured = []
 
         def fake_pipeline(file_paths, original_filename=None, **kwargs):
-            pipeline_calls.append(file_paths)
+            captured.append({"file_paths": file_paths, "original_filename": original_filename, **kwargs})
+            return ids if ids is not None else ["fake-id-1"]
+
+        data = {}
+        if confirmed is not None:
+            data["confirmed"] = confirmed
 
         with (
             patch(
                 "app.services.chatbot.cahtbot_router.upload_docs_pipeline",
                 side_effect=fake_pipeline,
             ),
-            patch("os.path.exists", return_value=False),  # skip cleanup
+            patch("os.path.exists", return_value=False),
         ):
             with TestClient(_build_app()) as client:
                 resp = client.post(
                     "/upload_docs",
                     headers={"X-Admin-Key": ADMIN_KEY},
                     files={"file": (filename, io.BytesIO(content), "text/plain")},
+                    data=data,
                 )
 
-        return resp, pipeline_calls
+        return resp, captured
 
     def test_authorized_txt_upload_succeeds(self):
-        resp, pipeline_calls = self._do_upload("document.txt")
+        resp, captured = self._do_upload("document.txt")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "success"
         assert body["filename"] == "document.txt"
-        assert len(pipeline_calls) == 1
+        assert len(captured) == 1
 
     def test_authorized_pdf_upload_succeeds(self):
         resp, _ = self._do_upload("document.pdf", b"%PDF-content")
         assert resp.status_code == 200
         assert resp.json()["status"] == "success"
 
-    def test_server_generated_path_does_not_contain_client_filename(self):
-        """The server must not use the client-supplied filename as the disk path."""
-        pipeline_calls = []
+    def test_success_message_reflects_approval(self):
+        resp, _ = self._do_upload("document.txt")
+        assert resp.json()["message"] == "Document uploaded and approved for Yurumein AI."
 
-        def fake_pipeline(file_paths, original_filename=None, **kwargs):
-            pipeline_calls.append(file_paths[0])
+    def test_success_includes_chunks_indexed(self):
+        resp, _ = self._do_upload("document.txt", ids=["id1", "id2", "id3"])
+        assert resp.json()["chunks_indexed"] == 3
+
+    def test_missing_confirmation_returns_422(self):
+        """No confirmed field → 422 before the pipeline is called."""
+        captured = []
+
+        def fake_pipeline(*a, **kw):
+            captured.append(True)
+            return ["id"]
 
         with (
-            patch(
-                "app.services.chatbot.cahtbot_router.upload_docs_pipeline",
-                side_effect=fake_pipeline,
-            ),
+            patch("app.services.chatbot.cahtbot_router.upload_docs_pipeline", side_effect=fake_pipeline),
             patch("os.path.exists", return_value=False),
         ):
             with TestClient(_build_app()) as client:
                 resp = client.post(
                     "/upload_docs",
                     headers={"X-Admin-Key": ADMIN_KEY},
-                    files={"file": (
-                        "../../etc/passwd",  # path-traversal attempt
-                        io.BytesIO(b"content"),
-                        "text/plain",
-                    )},
+                    files={"file": ("doc.txt", io.BytesIO(b"content"), "text/plain")},
                 )
+        assert resp.status_code == 422
+        assert "confirmation" in resp.json()["detail"].lower()
+        assert captured == [], "Pipeline must not be called without confirmation"
 
-        # Extension .passwd is not in ALLOWED_EXTENSIONS → 400 before pipeline is reached
+    def test_false_confirmation_returns_422(self):
+        resp, captured = self._do_upload("document.txt", confirmed="false")
+        assert resp.status_code == 422
+        assert captured == []
+
+    def test_pipeline_called_with_confirmed_true(self):
+        """Route must pass confirmed=True to the pipeline."""
+        _, captured = self._do_upload("document.txt")
+        assert len(captured) == 1
+        assert captured[0].get("confirmed") is True
+
+    def test_historia_filename_rejected_before_pipeline(self):
+        """Known restricted source must be blocked even with confirmation."""
+        resp, captured = self._do_upload(
+            "Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt"
+        )
         assert resp.status_code == 400
-        assert len(pipeline_calls) == 0
+        assert "restricted" in resp.json()["detail"].lower()
+        assert captured == [], "Pipeline must not be called for restricted source"
+
+    def test_historia_filename_case_insensitive(self):
+        resp, captured = self._do_upload("historia_es_en_draft.txt")
+        assert resp.status_code == 400
+        assert captured == []
+
+    def test_zero_chunks_returns_400(self):
+        """Pipeline returns [] → no content extracted → 400, not success."""
+        resp, _ = self._do_upload("empty.txt", ids=[])
+        assert resp.status_code == 400
+        assert "extracted" in resp.json()["detail"].lower() or "empty" in resp.json()["detail"].lower()
+
+    def test_server_generated_path_does_not_contain_client_filename(self):
+        """The server must not use the client-supplied path for disk I/O."""
+        resp, _ = self._do_upload("../../etc/passwd")
+        # .passwd is not in ALLOWED_EXTENSIONS → 400
+        assert resp.status_code == 400
 
     def test_server_generated_path_does_not_contain_client_stem(self):
         """UUID-based filename: pipeline receives a UUID path, not the client stem."""
-        pipeline_calls = []
-
-        def fake_pipeline(file_paths, original_filename=None, **kwargs):
-            pipeline_calls.append(file_paths[0])
-
-        with (
-            patch(
-                "app.services.chatbot.cahtbot_router.upload_docs_pipeline",
-                side_effect=fake_pipeline,
-            ),
-            patch("os.path.exists", return_value=False),
-        ):
-            with TestClient(_build_app()) as client:
-                resp = client.post(
-                    "/upload_docs",
-                    headers={"X-Admin-Key": ADMIN_KEY},
-                    files={"file": ("my_secret_name.txt", io.BytesIO(b"content"), "text/plain")},
-                )
-
-        assert resp.status_code == 200
-        disk_path = pipeline_calls[0]
-        # The server-generated path must end with .txt but NOT contain the original stem
+        _, captured = self._do_upload("my_secret_name.txt")
+        assert len(captured) == 1
+        disk_path = captured[0]["file_paths"][0]
         assert disk_path.endswith(".txt")
         assert "my_secret_name" not in disk_path
-        # Path should contain a 32-character hex UUID
         import re
-        filename_part = os.path.basename(disk_path)
-        assert re.match(r"^[0-9a-f]{32}\.txt$", filename_part), (
-            f"Expected UUID-based filename, got: {filename_part}"
-        )
+        assert re.match(r"^[0-9a-f]{32}\.txt$", os.path.basename(disk_path))
 
     def test_pipeline_not_called_without_key(self):
-        pipeline_calls = []
+        captured = []
 
         with patch(
             "app.services.chatbot.cahtbot_router.upload_docs_pipeline",
-            side_effect=lambda fp, **kw: pipeline_calls.append(fp),
+            side_effect=lambda fp, **kw: captured.append(fp),
         ):
             with TestClient(_build_app()) as client:
                 client.post(
                     "/upload_docs",
                     files={"file": ("doc.txt", io.BytesIO(b"content"), "text/plain")},
+                    data={"confirmed": "true"},
                 )
-        assert pipeline_calls == [], "Pipeline must not be called on unauthenticated request"
+        assert captured == [], "Pipeline must not be called on unauthenticated request"
