@@ -128,10 +128,15 @@ class ProcessedData:
                     if not cleaned_text:
                         continue
 
-                    metadata = self._base_metadata(file_path, doc_type, index)
-                    metadata.update(doc.metadata or {})
-                    if metadata.get("page") is not None:
-                        metadata["page_number"] = int(metadata["page"]) + 1
+                    # Merge order matters: loader metadata is applied first (brings
+                    # in page, row, and other loader-specific fields), then base
+                    # identity fields are applied last so they always win.  This
+                    # prevents loaders from overwriting source/filename/section with
+                    # the UUID storage path they received as file_path.
+                    loader_meta = dict(doc.metadata or {})
+                    metadata = {**loader_meta, **self._base_metadata(file_path, doc_type, index)}
+                    if loader_meta.get("page") is not None:
+                        metadata["page_number"] = int(loader_meta["page"]) + 1
 
                     all_docs.append(
                         Document(

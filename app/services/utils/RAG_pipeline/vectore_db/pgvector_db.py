@@ -323,9 +323,11 @@ def upload_docs_pipeline(
             return []
 
         # Gate newly uploaded content from public retrieval until approved.
+        # Hard-assign — not setdefault — so loader metadata can never accidentally
+        # leave a chunk with publication_allowed=True or no review_state.
         for chunk in chunks:
-            chunk.metadata.setdefault("publication_allowed", False)
-            chunk.metadata.setdefault("review_state", "pending_cultural_review")
+            chunk.metadata["publication_allowed"] = False
+            chunk.metadata["review_state"] = "pending_cultural_review"
 
         v_store = VectorStoreManager()
         ids = v_store.add_documents(chunks)

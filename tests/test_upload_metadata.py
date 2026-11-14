@@ -1,15 +1,21 @@
 """
-Tests for upload metadata integrity and publication restriction after UUID filename change.
+Tests for upload metadata integrity and publication restriction.
 
 Covers:
-  1. ProcessedData._base_metadata uses original_filename when supplied
-  2. upload_docs_pipeline stamps publication_allowed=False on every chunk
-  3. Restriction filter blocks pending chunks from public context
-  4. Source/filename ILIKE patterns still work with original name
-  5. Path-traversal in original_filename has no disk-I/O effect
-  6. Route-level: authorized upload preserves original name in pipeline call
+  1. ProcessedData.load_all_documents: original_filename survives loader metadata
+     - Tested with actual TextLoader (injects source=UUID_path)
+     - Tested with simulated PyPDFLoader shape (source + page fields)
+     - Tested with simulated UnstructuredWordDocumentLoader shape (source only)
+  2. page_number is correctly derived from loader-supplied page even after fix
+  3. upload_docs_pipeline unconditionally stamps publication_allowed=False /
+     review_state=pending regardless of loader or base metadata
+  4. Restriction filter blocks pending chunks from public context
+  5. Historia name preserved through merge enables source-path guard
+  6. Route level: authorized upload passes sanitized original_filename to pipeline
+  7. Disk path uses UUID; original name is metadata-only
 
-No live database or VPS access — all storage calls are mocked.
+No live database or VPS access — storage calls mocked; TextLoader test uses a
+real temp file.
 
 Run from repo root:
     pytest tests/test_upload_metadata.py -v
@@ -17,6 +23,7 @@ Run from repo root:
 
 import io
 import os
+import tempfile
 import pytest
 from unittest.mock import patch, MagicMock, call
 from pathlib import Path
@@ -25,152 +32,310 @@ from langchain_core.documents import Document
 
 
 # ===========================================================================
-# 1. ProcessedData._base_metadata — original_filename override
+# 1. load_all_documents — original_filename survives loader metadata injection
 # ===========================================================================
 
-class TestBaseMetadataWithOriginalFilename:
-    """_base_metadata should use original_filename when provided."""
+class TestLoaderMetadataMergeOrder:
+    """
+    Document loaders inject their own 'source' key pointing at the UUID disk
+    path.  The merge order fix must ensure base identity fields (source,
+    filename, section) win after the merge, not before.
+    """
 
-    def _make_processor(self, original_filename=None):
+    def test_text_loader_does_not_overwrite_source(self):
+        """
+        Real TextLoader integration: creates a temp file, verifies that
+        source/filename in the resulting Document metadata is the original_filename,
+        NOT the UUID temp path that TextLoader injects.
+        """
         from app.services.utils.RAG_pipeline.processed_data.processed_data import ProcessedData
-        return ProcessedData(
-            file_paths=["/tmp/abc123.pdf"],
-            original_filename=original_filename,
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("Ibagari buiganü Garínagu luma Surínama.\n" * 10)
+            uuid_path = f.name
+
+        try:
+            processor = ProcessedData(
+                file_paths=[uuid_path],
+                original_filename="Garifuna_Language_Overview.txt",
+            )
+            docs = processor.load_all_documents()
+            assert len(docs) >= 1
+            for doc in docs:
+                assert doc.metadata["source"] == "Garifuna_Language_Overview.txt", (
+                    f"source was {doc.metadata['source']!r}; expected original_filename"
+                )
+                assert doc.metadata["filename"] == "Garifuna_Language_Overview.txt"
+                assert doc.metadata["section"] == "Garifuna_Language_Overview.txt"
+                # UUID path must not appear anywhere in source or filename
+                assert os.path.basename(uuid_path) not in doc.metadata["source"]
+        finally:
+            os.unlink(uuid_path)
+
+    def test_text_loader_without_original_filename_falls_back_to_basename(self):
+        """
+        When no original_filename is set (bulk-load path), source is derived
+        from the actual file basename — not broken by the fix.
+        """
+        from app.services.utils.RAG_pipeline.processed_data.processed_data import ProcessedData
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8", prefix="LIBRO_SERIE_I_"
+        ) as f:
+            f.write("Cultural heritage text.\n" * 5)
+            path = f.name
+
+        try:
+            processor = ProcessedData(file_paths=[path])
+            docs = processor.load_all_documents()
+            assert len(docs) >= 1
+            # source should be the basename, not an empty string or UUID artifact
+            assert docs[0].metadata["source"] == os.path.basename(path)
+        finally:
+            os.unlink(path)
+
+    def _make_processor_with_mock_loader(self, loader_meta: dict, original_filename: str):
+        """
+        Returns (processor, docs) where the loader is mocked to return a single
+        Document with the given loader_meta.  Used to test PDF and DOCX shapes
+        without binary files.
+        """
+        from app.services.utils.RAG_pipeline.processed_data.processed_data import ProcessedData
+
+        fake_doc = Document(
+            page_content="Garifuna cultural content for testing.",
+            metadata=loader_meta,
         )
 
-    def test_without_override_uses_uuid_path(self):
-        p = self._make_processor()
-        meta = p._base_metadata("/tmp/abc123def456.pdf", "pdf", 0)
-        assert meta["source"] == "abc123def456.pdf"
-        assert meta["filename"] == "abc123def456.pdf"
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            uuid_path = f.name
 
-    def test_with_override_uses_original_name(self):
-        p = self._make_processor(original_filename="Garifuna_Dictionary_v2.pdf")
-        meta = p._base_metadata("/tmp/abc123def456.pdf", "pdf", 0)
-        assert meta["source"] == "Garifuna_Dictionary_v2.pdf"
-        assert meta["filename"] == "Garifuna_Dictionary_v2.pdf"
-        assert meta["section"] == "Garifuna_Dictionary_v2.pdf"
+        try:
+            processor = ProcessedData(
+                file_paths=[uuid_path],
+                original_filename=original_filename,
+            )
+            with patch.object(processor, "load_all_file_paths", return_value=[uuid_path]):
+                # Patch the loader class so load() returns our fake doc
+                with patch(
+                    "app.services.utils.RAG_pipeline.processed_data.processed_data.PyPDFLoader"
+                ) as mock_cls:
+                    mock_cls.return_value.load.return_value = [fake_doc]
+                    docs = processor.load_all_documents()
+        finally:
+            os.unlink(uuid_path)
 
-    def test_uuid_path_absent_from_stored_metadata(self):
-        """The UUID disk path must not appear in any metadata field."""
-        p = self._make_processor(original_filename="Garifuna_Dictionary_v2.pdf")
-        meta = p._base_metadata("/tmp/abc123def456.pdf", "pdf", 0)
-        for field in ("source", "filename", "section"):
-            assert "abc123def456" not in meta[field]
+        return docs
 
-    def test_original_filename_cannot_inject_path_separator(self):
-        """Even if the caller passes a path with separators, only the basename is used.
-        Note: sanitization happens in the router; this test documents that
-        the pipeline stores whatever string is passed. The safe_original_name
-        extraction in the router is what prevents path injection."""
-        p = self._make_processor(original_filename="safe_name.pdf")
-        meta = p._base_metadata("/tmp/abc.pdf", "pdf", 0)
-        assert meta["source"] == "safe_name.pdf"
-
-    def test_historia_name_preserved_enables_restriction_guard(self):
-        """Original Historia filename must survive into source metadata so
-        _is_publication_restricted can fire the source-path guard."""
-        p = self._make_processor(
-            original_filename="Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt"
+    def test_pdf_loader_source_does_not_overwrite_original_filename(self):
+        """
+        PyPDFLoader injects {"source": uuid_path, "page": 0}.
+        source must be the original filename; page_number must be derived correctly.
+        """
+        uuid_path = "/tmp/abc123def456.pdf"
+        docs = self._make_processor_with_mock_loader(
+            loader_meta={"source": uuid_path, "page": 2},
+            original_filename="Garifuna_History_EN.pdf",
         )
-        meta = p._base_metadata("/tmp/abc123.txt", "txt", 0)
-        assert "HISTORIA_ES_EN" in meta["source"].upper()
+        assert len(docs) >= 1
+        doc = docs[0]
+        assert doc.metadata["source"] == "Garifuna_History_EN.pdf", (
+            f"source was {doc.metadata['source']!r}"
+        )
+        assert doc.metadata["filename"] == "Garifuna_History_EN.pdf"
+        assert "abc123def456" not in doc.metadata["source"]
+        # page_number should be page+1 = 3
+        assert doc.metadata.get("page_number") == 3
 
-    def test_approved_name_does_not_trigger_restriction_guard(self):
-        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
-        p = self._make_processor(original_filename="Garifuna_Language_Overview.pdf")
-        meta = p._base_metadata("/tmp/abc123.pdf", "pdf", 0)
-        # source-path guard should NOT fire
-        assert _is_publication_restricted(meta) is False
+    def test_docx_loader_source_does_not_overwrite_original_filename(self):
+        """
+        UnstructuredWordDocumentLoader injects {"source": uuid_path}.
+        source must be the original filename; no page (docx has no page field).
+        """
+        from app.services.utils.RAG_pipeline.processed_data.processed_data import ProcessedData
+
+        uuid_path = "/tmp/abc123def456.docx"
+        fake_doc = Document(
+            page_content="Garínagu cultural content.",
+            metadata={"source": uuid_path},
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
+            tmp_docx = f.name
+
+        try:
+            processor = ProcessedData(
+                file_paths=[tmp_docx],
+                original_filename="Garifuna_Cultural_Guide.docx",
+            )
+            with patch.object(processor, "load_all_file_paths", return_value=[tmp_docx]):
+                with patch(
+                    "app.services.utils.RAG_pipeline.processed_data.processed_data.UnstructuredWordDocumentLoader"
+                ) as mock_cls:
+                    mock_cls.return_value.load.return_value = [fake_doc]
+                    docs = processor.load_all_documents()
+        finally:
+            os.unlink(tmp_docx)
+
+        assert len(docs) >= 1
+        assert docs[0].metadata["source"] == "Garifuna_Cultural_Guide.docx"
+        assert docs[0].metadata.get("page_number") is None  # no page in docx loader
+
+    def test_loader_page_field_is_preserved_after_merge(self):
+        """
+        page (from loader) must remain in metadata for page-aware queries,
+        even though source is overridden.
+        """
+        from app.services.utils.RAG_pipeline.processed_data.processed_data import ProcessedData
+
+        uuid_path = "/tmp/paged_uuid.pdf"
+        fake_doc = Document(
+            page_content="Page content here.",
+            metadata={"source": uuid_path, "page": 4},
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            tmp_pdf = f.name
+
+        try:
+            processor = ProcessedData(
+                file_paths=[tmp_pdf],
+                original_filename="Yurumein_Language_Book.pdf",
+            )
+            with patch.object(processor, "load_all_file_paths", return_value=[tmp_pdf]):
+                with patch(
+                    "app.services.utils.RAG_pipeline.processed_data.processed_data.PyPDFLoader"
+                ) as mock_cls:
+                    mock_cls.return_value.load.return_value = [fake_doc]
+                    docs = processor.load_all_documents()
+        finally:
+            os.unlink(tmp_pdf)
+
+        assert docs[0].metadata["source"] == "Yurumein_Language_Book.pdf"
+        assert docs[0].metadata["page"] == 4       # loader field preserved
+        assert docs[0].metadata["page_number"] == 5  # page + 1
 
 
 # ===========================================================================
-# 2. upload_docs_pipeline — publication_allowed=False injected on all chunks
+# 2. Historia filename through merge enables restriction guard
+# ===========================================================================
+
+class TestHistoriaFilenamePreservedThroughMerge:
+
+    def test_historia_name_survives_text_loader_injection(self):
+        """
+        Real TextLoader integration with a Historia-named original_filename.
+        The source-path guard must fire on the resulting document.
+        """
+        from app.services.utils.RAG_pipeline.processed_data.processed_data import ProcessedData
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("Historia cultural content.\n" * 10)
+            uuid_path = f.name
+
+        try:
+            processor = ProcessedData(
+                file_paths=[uuid_path],
+                original_filename="Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt",
+            )
+            docs = processor.load_all_documents()
+            assert len(docs) >= 1
+            for doc in docs:
+                assert _is_publication_restricted(doc.metadata) is True, (
+                    f"Historia chunk not blocked; source={doc.metadata.get('source')!r}"
+                )
+        finally:
+            os.unlink(uuid_path)
+
+
+# ===========================================================================
+# 3. upload_docs_pipeline — publication_allowed unconditionally False
 # ===========================================================================
 
 class TestPipelinePublicationDefault:
-    """Every chunk from upload_docs_pipeline must carry publication_allowed=False."""
 
-    def _run_pipeline(self, original_filename=None, extra_meta=None):
-        """Run pipeline with mocked ProcessedData and VectorStoreManager.
-        Returns the Document list that would have been passed to add_documents."""
-        chunk = Document(
-            page_content="some garifuna content",
-            metadata={"source": "some_doc.txt", **(extra_meta or {})},
-        )
-
+    def _run_pipeline(self, chunks=None, original_filename=None):
+        """Run pipeline with mocked ProcessedData and VectorStoreManager."""
+        if chunks is None:
+            chunks = [Document(
+                page_content="garifuna content",
+                metadata={"source": "doc.txt"},
+            )]
         added_docs = []
 
-        def fake_add_documents(docs, **kwargs):
+        def fake_add(docs, **kw):
             added_docs.extend(docs)
             return ["fake-id"] * len(docs)
 
         with (
-            patch(
-                "app.services.utils.RAG_pipeline.vectore_db.pgvector_db.ProcessedData"
-            ) as mock_pd_cls,
-            patch(
-                "app.services.utils.RAG_pipeline.vectore_db.pgvector_db.VectorStoreManager"
-            ) as mock_vs_cls,
+            patch("app.services.utils.RAG_pipeline.vectore_db.pgvector_db.ProcessedData") as pd,
+            patch("app.services.utils.RAG_pipeline.vectore_db.pgvector_db.VectorStoreManager") as vs,
         ):
-            mock_pd_cls.return_value.chunking.return_value = [chunk]
-            mock_vs_cls.return_value.add_documents.side_effect = fake_add_documents
-
+            pd.return_value.chunking.return_value = chunks
+            vs.return_value.add_documents.side_effect = fake_add
             from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import upload_docs_pipeline
-            upload_docs_pipeline(
-                file_paths=["/tmp/abc123.txt"],
-                original_filename=original_filename,
-            )
+            upload_docs_pipeline(file_paths=["/tmp/abc.txt"], original_filename=original_filename)
 
         return added_docs
 
     def test_publication_allowed_false_on_new_upload(self):
         docs = self._run_pipeline()
-        assert len(docs) == 1
         assert docs[0].metadata["publication_allowed"] is False
 
     def test_review_state_pending_on_new_upload(self):
         docs = self._run_pipeline()
         assert docs[0].metadata["review_state"] == "pending_cultural_review"
 
+    def test_publication_allowed_cannot_be_set_true_by_loader(self):
+        """Hard assignment — not setdefault — means even a chunk that arrives
+        with publication_allowed=True gets overwritten to False."""
+        chunk = Document(
+            page_content="content",
+            metadata={"source": "doc.txt", "publication_allowed": True},
+        )
+        docs = self._run_pipeline(chunks=[chunk])
+        assert docs[0].metadata["publication_allowed"] is False, (
+            "publication_allowed=True from loader must be unconditionally overridden"
+        )
+
+    def test_truthy_review_state_overwritten(self):
+        """Any loader-supplied review_state is replaced."""
+        chunk = Document(
+            page_content="content",
+            metadata={"source": "doc.txt", "review_state": "approved"},
+        )
+        docs = self._run_pipeline(chunks=[chunk])
+        assert docs[0].metadata["review_state"] == "pending_cultural_review"
+
     def test_all_chunks_get_restriction_flag(self):
-        chunk1 = Document(page_content="chunk 1", metadata={"source": "doc.txt"})
-        chunk2 = Document(page_content="chunk 2", metadata={"source": "doc.txt"})
-        added_docs = []
-
-        with (
-            patch("app.services.utils.RAG_pipeline.vectore_db.pgvector_db.ProcessedData") as pd,
-            patch("app.services.utils.RAG_pipeline.vectore_db.pgvector_db.VectorStoreManager") as vs,
-        ):
-            pd.return_value.chunking.return_value = [chunk1, chunk2]
-            vs.return_value.add_documents.side_effect = lambda docs, **kw: (
-                added_docs.extend(docs) or ["id1", "id2"]
-            )
-            from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import upload_docs_pipeline
-            upload_docs_pipeline(file_paths=["/tmp/test.txt"])
-
-        assert all(d.metadata["publication_allowed"] is False for d in added_docs)
-        assert all(d.metadata["review_state"] == "pending_cultural_review" for d in added_docs)
-
-    def test_explicit_false_already_set_is_not_overridden(self):
-        """setdefault must not overwrite an already-false value."""
-        docs = self._run_pipeline(extra_meta={"publication_allowed": False})
-        assert docs[0].metadata["publication_allowed"] is False
+        chunks = [
+            Document(page_content="chunk 1", metadata={"source": "doc.txt"}),
+            Document(page_content="chunk 2", metadata={"source": "doc.txt", "publication_allowed": True}),
+            Document(page_content="chunk 3", metadata={"source": "doc.txt", "review_state": "approved"}),
+        ]
+        docs = self._run_pipeline(chunks=chunks)
+        assert all(d.metadata["publication_allowed"] is False for d in docs)
+        assert all(d.metadata["review_state"] == "pending_cultural_review" for d in docs)
 
     def test_original_filename_passed_to_processor(self):
         with (
             patch("app.services.utils.RAG_pipeline.vectore_db.pgvector_db.ProcessedData") as pd,
-            patch("app.services.utils.RAG_pipeline.vectore_db.pgvector_db.VectorStoreManager") as vs,
+            patch("app.services.utils.RAG_pipeline.vectore_db.pgvector_db.VectorStoreManager"),
         ):
             pd.return_value.chunking.return_value = []
             from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import upload_docs_pipeline
             upload_docs_pipeline(
-                file_paths=["/tmp/abc123.pdf"],
-                original_filename="Real_Document_Name.pdf",
+                file_paths=["/tmp/abc.pdf"],
+                original_filename="Real_Doc.pdf",
             )
         pd.assert_called_once_with(
-            file_paths=["/tmp/abc123.pdf"],
-            original_filename="Real_Document_Name.pdf",
+            file_paths=["/tmp/abc.pdf"],
+            original_filename="Real_Doc.pdf",
         )
 
     def test_empty_chunk_list_returns_empty(self):
@@ -186,33 +351,30 @@ class TestPipelinePublicationDefault:
 
 
 # ===========================================================================
-# 3. Restriction filter — pending chunks blocked from public retrieval
+# 4. Restriction filter — pending chunks blocked from public retrieval
 # ===========================================================================
 
 class TestPendingChunkBlocked:
-    """Chunks stamped publication_allowed=False must be filtered from retrieval."""
 
-    def test_pending_chunk_filtered_by_is_publication_restricted(self):
+    def test_pending_chunk_blocked_by_publication_allowed_false(self):
         from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
-        meta = {"publication_allowed": False, "review_state": "pending_cultural_review"}
-        assert _is_publication_restricted(meta) is True
+        assert _is_publication_restricted(
+            {"publication_allowed": False, "review_state": "pending_cultural_review"}
+        ) is True
 
-    def test_pending_chunk_filtered_by_filter_restricted_docs(self):
-        """The Nodes method must exclude pending-upload chunks."""
+    def test_pending_chunk_filtered_from_retrieval_set(self):
         from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
         docs = [
-            {"page_content": "pending content",
-             "metadata": {"publication_allowed": False, "review_state": "pending_cultural_review"}},
-            {"page_content": "approved content",
-             "metadata": {"publication_allowed": True}},
+            {"metadata": {"publication_allowed": False, "review_state": "pending_cultural_review"},
+             "page_content": "pending content"},
+            {"metadata": {"publication_allowed": True}, "page_content": "approved content"},
         ]
-        filtered = [d for d in docs if not _is_publication_restricted(d["metadata"])]
-        assert len(filtered) == 1
-        assert filtered[0]["page_content"] == "approved content"
+        public = [d for d in docs if not _is_publication_restricted(d["metadata"])]
+        assert len(public) == 1
+        assert public[0]["page_content"] == "approved content"
 
     def test_historia_upload_double_blocked(self):
-        """A Historia file that gets past the extension check is blocked by BOTH
-        source-path guard AND the pending publication state."""
+        """Historia name + pending state: both guards fire independently."""
         from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
         meta = {
             "source": "Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt",
@@ -223,29 +385,27 @@ class TestPendingChunkBlocked:
 
 
 # ===========================================================================
-# 4. Route level — authorized upload passes original_filename to pipeline
+# 5. Route level — authorized upload passes sanitized original_filename
 # ===========================================================================
 
 class TestUploadRoutePassesOriginalName:
-    """The router must extract the original filename and pass it to the pipeline."""
 
-    def test_original_name_reaches_pipeline(self):
+    def _do_upload_with_pipeline_capture(self, filename: str, content: bytes = b"x"):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from app.core.config import settings
 
         ADMIN_KEY = "test-key-abc"
         settings.ADMIN_API_KEY = ADMIN_KEY
-
         app = FastAPI()
-        from app.services.chatbot.cahtbot_router import router as chatbot_router
-        app.include_router(chatbot_router)
+        from app.services.chatbot.cahtbot_router import router
+        app.include_router(router)
 
-        pipeline_calls = {}
+        captured = {}
 
-        def fake_pipeline(file_paths, original_filename=None, **kwargs):
-            pipeline_calls["original_filename"] = original_filename
-            pipeline_calls["file_paths"] = file_paths
+        def fake_pipeline(file_paths, original_filename=None, **kw):
+            captured["original_filename"] = original_filename
+            captured["disk_path"] = file_paths[0] if file_paths else ""
 
         with (
             patch("app.services.chatbot.cahtbot_router.upload_docs_pipeline", side_effect=fake_pipeline),
@@ -255,81 +415,32 @@ class TestUploadRoutePassesOriginalName:
                 resp = client.post(
                     "/upload_docs",
                     headers={"X-Admin-Key": ADMIN_KEY},
-                    files={"file": ("My_Garifuna_Doc.txt", io.BytesIO(b"content"), "text/plain")},
+                    files={"file": (filename, io.BytesIO(content), "text/plain")},
                 )
+        return resp, captured
 
+    def test_original_name_reaches_pipeline(self):
+        resp, captured = self._do_upload_with_pipeline_capture("My_Garifuna_Doc.txt")
         assert resp.status_code == 200
-        assert pipeline_calls["original_filename"] == "My_Garifuna_Doc.txt"
+        assert captured["original_filename"] == "My_Garifuna_Doc.txt"
 
-    def test_path_traversal_in_filename_stripped_before_pipeline(self):
-        """../../etc/passwd.txt must arrive at pipeline as 'passwd.txt' (basename only).
-        The extension filter (.txt allowed) means this test only covers the
-        basename stripping — the directory components must be gone."""
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-        from app.core.config import settings
-
-        settings.ADMIN_API_KEY = "test-key-abc"
-        app = FastAPI()
-        from app.services.chatbot.cahtbot_router import router
-        app.include_router(router)
-
-        pipeline_calls = {}
-
-        def fake_pipeline(file_paths, original_filename=None, **kwargs):
-            pipeline_calls["original_filename"] = original_filename
-
-        with (
-            patch("app.services.chatbot.cahtbot_router.upload_docs_pipeline", side_effect=fake_pipeline),
-            patch("os.path.exists", return_value=False),
-        ):
-            with TestClient(app) as client:
-                resp = client.post(
-                    "/upload_docs",
-                    headers={"X-Admin-Key": "test-key-abc"},
-                    files={"file": ("../../etc/shadow.txt", io.BytesIO(b"content"), "text/plain")},
-                )
-
+    def test_path_traversal_stripped_to_basename(self):
+        resp, captured = self._do_upload_with_pipeline_capture("../../etc/shadow.txt")
         assert resp.status_code == 200
-        # Must NOT contain any path separator or directory component
-        name = pipeline_calls["original_filename"]
-        assert "/" not in name
-        assert "\\" not in name
+        name = captured["original_filename"]
+        assert "/" not in name and "\\" not in name
         assert name == "shadow.txt"
 
-    def test_disk_path_uses_uuid_not_original_name(self):
-        """The file must be written to a UUID path, never the original name."""
+    def test_disk_path_is_uuid_not_original_name(self):
         import re
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-        from app.core.config import settings
+        _, captured = self._do_upload_with_pipeline_capture("Real_Document_Name.txt")
+        disk = os.path.basename(captured.get("disk_path", ""))
+        assert re.match(r"^[0-9a-f]{32}\.txt$", disk), f"Expected UUID, got: {disk}"
+        assert "Real_Document_Name" not in captured["disk_path"]
 
-        settings.ADMIN_API_KEY = "test-key-abc"
-        app = FastAPI()
-        from app.services.chatbot.cahtbot_router import router
-        app.include_router(router)
-
-        pipeline_calls = {}
-
-        def fake_pipeline(file_paths, original_filename=None, **kwargs):
-            pipeline_calls["disk_path"] = file_paths[0] if file_paths else ""
-
-        with (
-            patch("app.services.chatbot.cahtbot_router.upload_docs_pipeline", side_effect=fake_pipeline),
-            patch("os.path.exists", return_value=False),
-            patch("builtins.open", MagicMock()),
-            patch("shutil.copyfileobj"),
-        ):
-            with TestClient(app) as client:
-                client.post(
-                    "/upload_docs",
-                    headers={"X-Admin-Key": "test-key-abc"},
-                    files={"file": ("Real_Document_Name.txt", io.BytesIO(b"x"), "text/plain")},
-                )
-
-        disk_path = pipeline_calls.get("disk_path", "")
-        filename_part = os.path.basename(disk_path)
-        assert re.match(r"^[0-9a-f]{32}\.txt$", filename_part), (
-            f"Expected UUID filename, got: {filename_part}"
-        )
-        assert "Real_Document_Name" not in disk_path
+    def test_response_shows_original_name(self):
+        resp, _ = self._do_upload_with_pipeline_capture("Cultural_Archive.txt")
+        assert resp.status_code == 200
+        assert resp.json()["filename"] == "Cultural_Archive.txt"
+        assert resp.json()["status"] == "success"
+        assert "review" in resp.json()["message"].lower() or "vectorized" in resp.json()["message"].lower()
