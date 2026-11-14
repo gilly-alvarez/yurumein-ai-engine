@@ -33,8 +33,12 @@ _ROLE_TO_SOURCE_PATTERN: dict[str, str] = {
     "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT": "%LIBRO GARIFUNA II%",
     "DICTIONARY":                             "%DICCIONARIO GARIFUNA%",
     "NATIONAL_ANTHEM":                        "%HIMNO_NACIONAL_GUATEMALA_GARIFUNA%",
-    "GARIFUNA_HISTORY_AND_IDENTITY":          "%GARIFUNA_IDENTITY_EN_ES%",
-    "COMMUNITY_ARCHIVE":                      "%ARCHIVO_BILINGUE%",
+    # GARIFUNA_HISTORY_AND_IDENTITY and COMMUNITY_ARCHIVE are intentionally absent:
+    # these roles receive a score boost via _boost_by_source_role but do NOT
+    # trigger _topup_from_preferred_source.  Top-up injection for identity/archive
+    # documents would force their chunks into unrelated cultural-practice queries
+    # (punta, Dügü, musical instruments) where they are not relevant.
+    # They surface via normal hybrid retrieval when the query is about their topics.
 }
 
 # Source-path ILIKE pattern for the Guatemala national anthem.
@@ -122,10 +126,44 @@ _CONTEXTUAL_QUERY_EXPANSIONS: list[tuple] = [
 ]
 
 
+# Source-path substrings that identify documents blocked from public LLM context
+# regardless of their publication_allowed metadata value.
+# Fail-closed: if the metadata field is absent, the source-path check still fires.
+# Case-insensitive match against the full source path stored in chunk metadata.
+_KNOWN_RESTRICTED_SOURCES: frozenset = frozenset({
+    "HISTORIA_ES_EN",   # Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt
+                        # publication_allowed: false, review_state: pending_cultural_review
+})
+
+
 def _is_publication_restricted(meta: dict) -> bool:
-    """Return True when chunk metadata signals publication_allowed=false."""
+    """
+    Return True when a chunk must not appear in public LLM context.
+
+    Three independent conditions; any one is sufficient:
+      1. publication_allowed is explicitly false (bool or string).
+      2. review_state is "pending_cultural_review" (staging draft).
+      3. Source path matches _KNOWN_RESTRICTED_SOURCES.
+         Condition 3 is the fail-closed guard: it fires even when metadata
+         fields are absent or null, so an indexing gap cannot inadvertently
+         expose a staged document.
+    """
+    # 1. Explicit publication_allowed=false
     pa = meta.get("publication_allowed")
-    return pa is False or (isinstance(pa, str) and pa.lower() == "false")
+    if pa is False or (isinstance(pa, str) and pa.lower() == "false"):
+        return True
+
+    # 2. Pending cultural review
+    rs = meta.get("review_state")
+    if isinstance(rs, str) and rs.lower() == "pending_cultural_review":
+        return True
+
+    # 3. Known restricted source (fail-closed guard)
+    source = (meta.get("source") or meta.get("filename") or "").upper()
+    if any(pattern in source for pattern in _KNOWN_RESTRICTED_SOURCES):
+        return True
+
+    return False
 
 
 class Nodes:
@@ -389,7 +427,13 @@ class Nodes:
         return pool + additional
 
     def _filter_restricted_docs(self, docs: list[dict]) -> list[dict]:
-        """Remove chunks whose metadata signals publication_allowed=false (fail-closed)."""
+        """Remove chunks that must not appear in public LLM context.
+
+        Three conditions apply: explicit publication_allowed=false, pending
+        cultural review state, and source-path match against
+        _KNOWN_RESTRICTED_SOURCES.  The source-path guard is fail-closed:
+        it fires even when metadata fields are absent or null.
+        """
         return [d for d in docs if not _is_publication_restricted(d.get("metadata") or {})]
 
     def _filter_low_info(self, docs: list[dict]) -> list[dict]:
@@ -1084,10 +1128,10 @@ class Nodes:
                 pool = self._topup_from_preferred_source(retrieval_query, pool, preferred)
 
             # 5a. Remove publication-restricted chunks before ranking.
-            # Chunks with publication_allowed=false are staging drafts not approved
-            # for public answers. This runs after top-up so targeted searches also
-            # have their restricted results removed. Fail-closed: if a chunk signals
-            # restriction, it is excluded regardless of its relevance score.
+            # Three conditions trigger removal (see _is_publication_restricted):
+            # explicit publication_allowed=false, pending_cultural_review state,
+            # or source-path match against _KNOWN_RESTRICTED_SOURCES (fail-closed
+            # guard that fires even when metadata fields are absent or null).
             pool = self._filter_restricted_docs(pool)
 
             # 6. Filter low-information chunks.

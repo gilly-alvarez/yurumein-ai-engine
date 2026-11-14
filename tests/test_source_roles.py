@@ -229,7 +229,12 @@ except Exception:
     _lexicon_importable = False
 
 try:
-    from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted as _ipr_fn, Nodes as _NodesClass
+    from app.services.utils.RAG_pipeline.workflow.nodes import (
+        _is_publication_restricted as _ipr_fn,
+        _KNOWN_RESTRICTED_SOURCES as _known_restricted,
+        _ROLE_TO_SOURCE_PATTERN as _role_to_src,
+        Nodes as _NodesClass,
+    )
     _nodes_importable = True
 except Exception:
     _nodes_importable = False
@@ -2171,6 +2176,116 @@ class TestStageAFixes:
     def test_filter_restricted_docs_empty_input(self):
         inst = object.__new__(_NodesClass)
         assert inst._filter_restricted_docs([]) == []
+
+    # Condition 2: review_state check
+    @requires_nodes
+    def test_is_publication_restricted_pending_review(self):
+        # review_state=pending_cultural_review alone is sufficient to block.
+        assert _ipr_fn({"review_state": "pending_cultural_review"}) is True
+
+    @requires_nodes
+    def test_is_publication_restricted_pending_review_uppercase(self):
+        assert _ipr_fn({"review_state": "PENDING_CULTURAL_REVIEW"}) is True
+
+    @requires_nodes
+    def test_is_publication_restricted_other_review_state(self):
+        # An unrelated review_state must not trigger the restriction.
+        assert _ipr_fn({"review_state": "approved"}) is False
+
+    # Condition 3: fail-closed source-path guard
+    @requires_nodes
+    def test_is_publication_restricted_historia_source_no_metadata(self):
+        # Fail-closed: Historia source path with NO publication_allowed field
+        # must still be blocked.
+        meta = {
+            "source": "/app/data/new_docs/Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt"
+        }
+        assert _ipr_fn(meta) is True, (
+            "Historia source path must be blocked even without publication_allowed metadata"
+        )
+
+    @requires_nodes
+    def test_is_publication_restricted_historia_source_null_pa(self):
+        # Fail-closed: null publication_allowed must NOT let Historia through.
+        meta = {
+            "source": "/app/data/Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt",
+            "publication_allowed": None,
+        }
+        assert _ipr_fn(meta) is True
+
+    @requires_nodes
+    def test_is_publication_restricted_unrelated_source_no_metadata(self):
+        # A non-Historia source with no metadata must NOT be blocked.
+        meta = {"source": "/app/data/Baliceaux_Yurumein_AI_Historical_Brief.docx"}
+        assert _ipr_fn(meta) is False
+
+    @requires_nodes
+    def test_known_restricted_sources_contains_historia(self):
+        # The fail-closed constant must include Historia's identifying substring.
+        assert any(
+            "HISTORIA_ES_EN" in pattern
+            for pattern in _known_restricted
+        ), "_KNOWN_RESTRICTED_SOURCES must contain 'HISTORIA_ES_EN'"
+
+    @requires_nodes
+    def test_filter_restricted_docs_historia_no_metadata_removed(self):
+        # Fail-closed: Historia source with no publication_allowed must be removed.
+        inst = object.__new__(_NodesClass)
+        docs = [
+            {
+                "page_content": "restricted content — no metadata flags",
+                "metadata": {
+                    "source": "/app/data/Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt"
+                },
+            },
+            {
+                "page_content": "open content",
+                "metadata": {"source": "/app/data/DICCIONARIO GARIFUNA.pdf"},
+            },
+        ]
+        result = inst._filter_restricted_docs(docs)
+        assert len(result) == 1
+        assert result[0]["page_content"] == "open content"
+
+    @requires_nodes
+    def test_filter_restricted_docs_pending_review_removed(self):
+        inst = object.__new__(_NodesClass)
+        docs = [
+            {"page_content": "draft",
+             "metadata": {"review_state": "pending_cultural_review"}},
+            {"page_content": "published",
+             "metadata": {"review_state": "approved"}},
+        ]
+        result = inst._filter_restricted_docs(docs)
+        assert len(result) == 1
+        assert result[0]["page_content"] == "published"
+
+    # Top-up exclusion: GARIFUNA_HISTORY_AND_IDENTITY must NOT be a top-up target
+    @requires_nodes
+    def test_history_identity_not_a_topup_target(self):
+        # Removing GARIFUNA_HISTORY_AND_IDENTITY from _ROLE_TO_SOURCE_PATTERN prevents
+        # _topup_from_preferred_source from force-injecting Identity chunks into
+        # punta/Dügü/instruments queries.  Boost still applies via _boost_by_source_role.
+        assert "GARIFUNA_HISTORY_AND_IDENTITY" not in _role_to_src, (
+            "GARIFUNA_HISTORY_AND_IDENTITY must not be in _ROLE_TO_SOURCE_PATTERN — "
+            "it is a boost-only role, not a top-up target."
+        )
+
+    @requires_nodes
+    def test_community_archive_not_a_topup_target(self):
+        assert "COMMUNITY_ARCHIVE" not in _role_to_src, (
+            "COMMUNITY_ARCHIVE must not be in _ROLE_TO_SOURCE_PATTERN — "
+            "it is a boost-only role, not a top-up target."
+        )
+
+    @requires_nodes
+    def test_foundational_language_still_a_topup_target(self):
+        # Regression guard: original top-up sources must remain intact.
+        assert "FOUNDATIONAL_LANGUAGE_EDUCATION" in _role_to_src
+
+    @requires_nodes
+    def test_advanced_language_still_a_topup_target(self):
+        assert "ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT" in _role_to_src
 
     # ── (4) CULTURAL_HISTORICAL preferred roles ordering ────────────────────
     # (Additional tests; primary tests are in TestIntentRouter above.)
