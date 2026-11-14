@@ -1,0 +1,331 @@
+# Yurumein AI — Source Registry
+#
+# Records provenance, authorship, copyright status, and permission state
+# for every document indexed in the production RAG corpus.
+#
+# PERMISSION CLASSIFICATIONS:
+#   author_permission_reported  — Yurumein AI founder confirms the author gave
+#                                 verbal/personal authorization; written record
+#                                 not yet obtained.
+#   permission_unknown          — No permission record exists. Source is
+#                                 retrievable but authorization is unverified.
+#   restricted                  — Blocked from public retrieval. Requires
+#                                 explicit editorial approval before release.
+#
+# TIER CLASSIFICATIONS (see claim_governance_pilot.yaml §Tier):
+#   A  — Primary domain-authoritative source (lexical authority for vocabulary)
+#   B  — Secondary authoritative source (community-authored, partially verified)
+#   C  — Provisional source (locked pending further review)
+#   U  — Unknown provenance (authorship or origin unverified)
+#
+# DO NOT:
+#   - treat permission_state as a legal clearance
+#   - infer redistribution rights from author_permission_reported alone
+#   - change publication_allowed flags without explicit owner authorization
+#   - use this file as runtime logic (it is governance documentation only)
+#
+# Created:  2026-11-14
+# Updated:  2026-11-14
+# ---------------------------------------------------------------------------
+
+sources:
+
+  # ---------------------------------------------------------------------------
+  # DICCIONARIO GARIFUNA (DIMUREI AGEI)
+  # ---------------------------------------------------------------------------
+  - id: DICCIONARIO_GARIFUNA
+    display_name: "Diccionario Garífuna (DIMUREI AGEI)"
+    filename: "DICCIONARIO GARIFUNA.pdf"
+    source_path_fragment: "DICCIONARIO GARIFUNA"
+    tier: B_overall_A_lexical
+    role: DICTIONARY
+
+    authorship:
+      verified_author: "Elmer Mauricio Enríquez Bermúdez"
+      pen_name: "ABÜRÜHATI"
+      verification_method: "Direct PDF inspection — title page and every page header"
+      verification_date: 2026-11-14
+      pdf_author_metadata: "Kelvin"
+      pdf_author_metadata_note: >
+        'Kelvin' is the person who converted the Word file to PDF, not the
+        book's author. The actual author is unambiguous on every page of the
+        printed publication.
+
+    publication:
+      publisher: "Editoriales C & J'J Enríquez"
+      location: "Livingston, Izabal, Guatemala"
+      year_digital: 2020
+      year_original_begun: 2013
+      pages: 206
+      chunks_indexed: 4972
+
+    copyright:
+      notice: >
+        "QUEDA TERMINANTEMENTE PROHIBIDA LA REPRODUCCIÓN TOTAL O PARCIAL DE
+        ESTE MATERIAL LITERARIO SIN PREVIO PERMISO ESCRITO POR EL AUTOR.
+        DERECHOS RESERVADOS COPYRIGHT EDICION DIGITAL
+        EMEB–Dimurei–agei–Enriquez-2020."
+      jurisdiction: Guatemala
+      status: in_copyright
+      license: all_rights_reserved
+
+    permission:
+      permission_state: author_permission_reported
+      permission_source: >
+        Elmer Mauricio Enríquez Bermúdez (ABÜRÜHATI) is a family member of
+        Yurumein AI's founder. The founder confirms the author personally
+        authorized use of his publications within Yurumein AI.
+      evidence_date: 2026-11-14
+      evidence_type: founder_verbal_confirmation
+      written_authorization_obtained: false
+      written_authorization_note: >
+        A formal written authorization document has not yet been obtained.
+        This record reflects the founder's confirmation only.
+      authorized_use: >
+        Use of the publications as indexed RAG sources within Yurumein AI for
+        Garífuna language education and cultural preservation.
+      rights_not_confirmed:
+        - commercial redistribution
+        - reproduction of substantial verbatim text to end users
+        - licensing to third parties
+
+  # ---------------------------------------------------------------------------
+  # LIBRO SERIE I
+  # ---------------------------------------------------------------------------
+  - id: LIBRO_SERIE_I
+    display_name: "Libro Serie I — Furendei Wamá Abürüha"
+    filename: "LIBRO SERIE I.pdf"
+    source_path_fragment: "LIBRO SERIE I"
+    tier: B
+    role: FOUNDATIONAL_LANGUAGE_EDUCATION
+
+    authorship:
+      verified_author: "Elmer Mauricio Enríquez Bermúdez"
+      pen_name: "ABÜRÜHATI"
+      verification_method: >
+        Indexed chunk inspection — title page (chunk 0–1) states
+        'Autor del libro e ideas originales: Elmer Mauricio Enríquez Bermúdez'.
+        Pen name on every page header.
+      verification_date: 2026-11-14
+      pdf_author_metadata: "Mauricio Enriquez"
+      pdf_author_metadata_note: >
+        Partial name matching the author — appears to be how the author set
+        his own PDF document properties. Not an error by a third party.
+
+    publication:
+      publisher: "Editoriales C & J'J Enríquez"
+      location: "Livingston, Izabal, Guatemala"
+      editions:
+        - edition: 1st
+          date: 2013-08-04
+          units: 9000
+        - edition: Special
+          date: 2015-06
+          sponsor: ADESCA
+        - edition: 3rd
+          date: 2017-11-26
+          units: 10000
+        - edition: Digital
+          year: 2020
+      pages: 136
+      chunks_indexed: 467
+
+    copyright:
+      notice: >
+        "QUEDA TERMINANTEMENTE PROHIBIDA LA REPRODUCCIÓN TOTAL O PARCIAL DE
+        ESTE MATERIAL LITERARIO SIN PREVIO PERMISO ESCRITO POR EL AUTOR.
+        DERECHOS RESERVADOS COPYRIGHT EMEB–G–Aban-2017."
+      jurisdiction: Guatemala
+      status: in_copyright
+      license: all_rights_reserved
+
+    permission:
+      permission_state: author_permission_reported
+      permission_source: >
+        Same as DICCIONARIO_GARIFUNA — same author, same founder confirmation.
+      evidence_date: 2026-11-14
+      evidence_type: founder_verbal_confirmation
+      written_authorization_obtained: false
+      authorized_use: >
+        Use of the publications as indexed RAG sources within Yurumein AI for
+        Garífuna language education and cultural preservation.
+      rights_not_confirmed:
+        - commercial redistribution
+        - reproduction of substantial verbatim text to end users
+        - licensing to third parties
+
+  # ---------------------------------------------------------------------------
+  # LIBRO GARIFUNA II FORMATO DIGITAL
+  # ---------------------------------------------------------------------------
+  - id: LIBRO_GARIFUNA_II
+    display_name: "Libro Garífuna II — Furendei Wamá Ayanuha"
+    filename: "LIBRO GARIFUNA II FORMATO DIGITAL.pdf"
+    source_path_fragment: "LIBRO GARIFUNA II FORMATO DIGITAL"
+    tier: B
+    role: ADVANCED_LANGUAGE_AND_CULTURAL_CONTEXT
+
+    authorship:
+      verified_author: "Elmer Mauricio Enríquez Bermúdez"
+      pen_name: "ABÜRÜHATI"
+      verification_method: >
+        Indexed chunk inspection — title page states
+        'Autor del libro e Ideas Originales: Elmer Mauricio Enríquez Bermudez'.
+        Pen name on every page header.
+      verification_date: 2026-11-14
+      pdf_author_metadata: "Delmi"
+      pdf_author_metadata_note: >
+        'Delmi' is an unidentified third party with no documented connection
+        to the work. This is the most serious attribution error in the three
+        books — the actual author is unambiguous in the indexed content.
+
+    publication:
+      publisher: "Editoriales C & J'J Enríquez"
+      location: "Livingston, Guatemala"
+      year_first_print: 2015-11-26
+      year_digital: 2020-04-17
+      pages: 149
+      chunks_indexed: 376
+
+    copyright:
+      notice: >
+        "QUEDA TERMINANTEMENTE PROHIBIDA LA REPRODUCCION TOTAL O PARCIAL DE
+        ESTE MATERIAL LITERARIO SIN PREVIO PERMISO ESCRITO POR EL AUTOR.
+        DERECHOS RESERVADOS COPYRIGHT EMEB–G–Bíama-2017."
+      jurisdiction: Guatemala
+      status: in_copyright
+      license: all_rights_reserved
+
+    permission:
+      permission_state: author_permission_reported
+      permission_source: >
+        Same as DICCIONARIO_GARIFUNA — same author, same founder confirmation.
+      evidence_date: 2026-11-14
+      evidence_type: founder_verbal_confirmation
+      written_authorization_obtained: false
+      authorized_use: >
+        Use of the publications as indexed RAG sources within Yurumein AI for
+        Garífuna language education and cultural preservation.
+      rights_not_confirmed:
+        - commercial redistribution
+        - reproduction of substantial verbatim text to end users
+        - licensing to third parties
+
+  # ---------------------------------------------------------------------------
+  # OTHER SOURCES — PERMISSION STATUS SUMMARY
+  # (Full bibliographic records to be added in future audit phases)
+  # ---------------------------------------------------------------------------
+
+  - id: YURUMEIN_LEXICON_PILOT
+    display_name: "Yurumein Lexicon Pilot A–An"
+    filename: "Lexicon Pilot A-Ab-An.docx"
+    source_path_fragment: "Lexicon Pilot"
+    tier: C
+    role: STRUCTURED_LEXICON
+    permission:
+      permission_state: permission_unknown
+      notes: "Internal Yurumein AI compilation. Authorship and provenance require documentation."
+
+  - id: YURUMEI_2024_ARCHIVO
+    display_name: "Hijos de Livingston — Archivo 2024"
+    filename: "Yurumei_2024_Archivo.docx"
+    source_path_fragment: "Yurumei_2024_Archivo"
+    tier: C
+    role: COMMUNITY_ARCHIVE
+    permission:
+      permission_state: permission_unknown
+      notes: >
+        Self-describes origin as Hijos de Livingston, Livingston 2024.
+        Duplicate of Yurumei_2024_Archivo_Bilingue — owner to decide canonical version.
+
+  - id: YURUMEI_2024_ARCHIVO_BILINGUE
+    display_name: "Hijos de Livingston — Archivo Bilingüe"
+    filename: "Yurumei_2024_YurumeinAI_Archivo_Bilingue.docx"
+    source_path_fragment: "ARCHIVO_BILINGUE"
+    tier: C
+    role: COMMUNITY_ARCHIVE
+    permission:
+      permission_state: permission_unknown
+      notes: >
+        Byte-for-byte identical to Yurumei_2024_Archivo (confirmed 2026-11-14 audit).
+        One copy should be deprecated — owner decision pending.
+
+  - id: GARIFUNA_IDENTITY
+    display_name: "Garífuna Identity"
+    filename: "Yurumein_Garifuna_Identity_EN_ES.docx"
+    source_path_fragment: "GARIFUNA_IDENTITY_EN_ES"
+    tier: C
+    role: GARIFUNA_HISTORY_AND_IDENTITY
+    permission:
+      permission_state: permission_unknown
+      notes: "Yurumein AI curatorial document. Owner attestation required."
+
+  - id: CHIEF_JOSEPH_CHATOYER
+    display_name: "Chief Joseph Chatoyer — Yurumein AI"
+    filename: "Chief_Joseph_Chatoyer_EN_ES.docx"
+    source_path_fragment: "CHIEF_JOSEPH_CHATOYER"
+    tier: C
+    role: GARIFUNA_HISTORY_AND_IDENTITY
+    permission:
+      permission_state: permission_unknown
+      notes: "Yurumein AI curatorial document. Owner attestation required."
+
+  - id: BALICEAUX_HISTORICAL_BRIEF
+    display_name: "Baliceaux — Yurumein AI Historical Brief"
+    filename: "Baliceaux_Historical_Brief.docx"
+    source_path_fragment: "BALICEAUX_YURUMEIN_AI_HISTORICAL_BRIEF"
+    tier: C
+    role: GARIFUNA_HISTORY_AND_IDENTITY
+    permission:
+      permission_state: permission_unknown
+      notes: "Yurumein AI curatorial document. Owner attestation required."
+
+  - id: HIMNO_NACIONAL_GUATEMALA
+    display_name: "Himno Nacional de Guatemala — Versión Garífuna"
+    filename: "Himno_Nacional_Guatemala.docx"
+    source_path_fragment: "HIMNO_NACIONAL_GUATEMALA_GARIFUNA"
+    tier: C
+    role: NATIONAL_ANTHEM
+    permission:
+      permission_state: permission_unknown
+      notes: >
+        Public domain text (national anthem). Garífuna transcription is a
+        contributed version not independently linguistically verified.
+
+  - id: GARIFUNA_LANGUAGE_OVERVIEW
+    display_name: "Garífuna Language Overview"
+    filename: "Garifuna Language Overview.pdf"
+    source_path_fragment: "GARIFUNA LANGUAGE OVERVIEW"
+    tier: U
+    role: SUPPLEMENTARY
+    permission:
+      permission_state: permission_unknown
+      notes: >
+        PDF creator metadata identifies 'ChatGPT Canvas' as creator.
+        AI-generated content alongside community-authored books requires
+        explicit editorial policy decision before continued use.
+
+  - id: MUSICAL_INSTRUMENTS_DATASET
+    display_name: "Garífuna Musical Instruments Dataset"
+    filename: "Garifuna_Musical_Instruments_Dataset.pdf.pdf"
+    source_path_fragment: "MUSICAL_INSTRUMENTS_DATASET"
+    tier: U
+    role: SUPPLEMENTARY
+    permission:
+      permission_state: permission_unknown
+      notes: >
+        Unknown authorship. Double .pdf extension suggests non-standard ingestion.
+        Provenance verification required.
+
+  - id: HISTORIA_ES_EN
+    display_name: "Historia ES/EN (Restricted)"
+    filename: "Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt"
+    source_path_fragment: "HISTORIA_ES_EN"
+    tier: C
+    role: RESTRICTED
+    permission:
+      permission_state: restricted
+      notes: >
+        Blocked from all public retrieval. Restriction enforced at two layers:
+        (1) application-level _KNOWN_RESTRICTED_SOURCES guard in nodes.py;
+        (2) publication_allowed=false in cmetadata (set 2026-11-14).
+        Do not change without explicit owner authorization.
