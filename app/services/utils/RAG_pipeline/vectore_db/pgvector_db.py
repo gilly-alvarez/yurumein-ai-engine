@@ -299,14 +299,33 @@ class VectorStoreManager:
         print("Collection deleted")
 
 
-def upload_docs_pipeline(file_paths: Optional[List[str]] = None):
-    """Process and upload docs with richer chunk metadata."""
+def upload_docs_pipeline(
+    file_paths: Optional[List[str]] = None,
+    original_filename: Optional[str] = None,
+) -> List[str]:
+    """Process and upload docs with richer chunk metadata.
+
+    When original_filename is supplied (sanitized basename from the upload
+    endpoint), it is stored in source/filename metadata instead of the
+    server-generated UUID path.  Every chunk produced by this pipeline is
+    marked publication_allowed=False and review_state="pending_cultural_review"
+    so newly indexed content is blocked from public retrieval until an
+    administrator explicitly approves it.
+    """
     try:
-        processor = ProcessedData(file_paths=file_paths)
+        processor = ProcessedData(
+            file_paths=file_paths,
+            original_filename=original_filename,
+        )
         chunks = processor.chunking()
 
         if not chunks:
             return []
+
+        # Gate newly uploaded content from public retrieval until approved.
+        for chunk in chunks:
+            chunk.metadata.setdefault("publication_allowed", False)
+            chunk.metadata.setdefault("review_state", "pending_cultural_review")
 
         v_store = VectorStoreManager()
         ids = v_store.add_documents(chunks)

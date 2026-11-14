@@ -17,11 +17,18 @@ from PIL import Image
 
 
 class ProcessedData:
-    def __init__(self, file_paths: Optional[List[str]] = None):
+    def __init__(
+        self,
+        file_paths: Optional[List[str]] = None,
+        original_filename: Optional[str] = None,
+    ):
         self.data_directory = "app/services/utils/RAG_pipeline/data/new_docs"
         self.file_paths = file_paths or []
         self.default_chunk_size = 800
         self.default_chunk_overlap = 120
+        # When set, overrides the filesystem name in source/filename metadata.
+        # Callers must supply the sanitized basename only (no path separators).
+        self._original_filename = original_filename
 
     def load_all_file_paths(self) -> List[str]:
         """Load all document file paths (PDF, TXT, DOCX, DOC, XLSX, XLS, CSV, images)."""
@@ -62,13 +69,16 @@ class ProcessedData:
             return ""
 
     def _base_metadata(self, file_path: str, doc_type: str, doc_index: int) -> dict:
-        file_name = os.path.basename(file_path)
+        # Use the caller-supplied original name when available so that
+        # source-pattern ILIKE queries and restriction guards match the real
+        # document identity rather than the server-generated UUID path.
+        display_name = self._original_filename or os.path.basename(file_path)
         return {
-            "source": file_path,
-            "filename": file_name,
+            "source": display_name,
+            "filename": display_name,
             "doc_type": doc_type,
             "doc_index": doc_index,
-            "section": file_name,
+            "section": display_name,
         }
 
     def load_all_documents(self) -> List[Document]:

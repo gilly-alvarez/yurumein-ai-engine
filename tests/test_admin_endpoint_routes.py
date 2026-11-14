@@ -374,7 +374,7 @@ class TestUploadDocsAuthorized:
         """Run an authorized upload; return (response, pipeline_call_args)."""
         pipeline_calls = []
 
-        def fake_pipeline(file_paths):
+        def fake_pipeline(file_paths, original_filename=None, **kwargs):
             pipeline_calls.append(file_paths)
 
         with (
@@ -410,7 +410,7 @@ class TestUploadDocsAuthorized:
         """The server must not use the client-supplied filename as the disk path."""
         pipeline_calls = []
 
-        def fake_pipeline(file_paths):
+        def fake_pipeline(file_paths, original_filename=None, **kwargs):
             pipeline_calls.append(file_paths[0])
 
         with (
@@ -439,7 +439,7 @@ class TestUploadDocsAuthorized:
         """UUID-based filename: pipeline receives a UUID path, not the client stem."""
         pipeline_calls = []
 
-        def fake_pipeline(file_paths):
+        def fake_pipeline(file_paths, original_filename=None, **kwargs):
             pipeline_calls.append(file_paths[0])
 
         with (
@@ -473,7 +473,7 @@ class TestUploadDocsAuthorized:
 
         with patch(
             "app.services.chatbot.cahtbot_router.upload_docs_pipeline",
-            side_effect=lambda fp: pipeline_calls.append(fp),
+            side_effect=lambda fp, **kw: pipeline_calls.append(fp),
         ):
             with TestClient(_build_app()) as client:
                 client.post(

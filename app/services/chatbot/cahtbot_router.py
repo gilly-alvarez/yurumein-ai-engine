@@ -475,6 +475,9 @@ async def upload_docs_RAG(file: UploadFile = File(...)):
     # Use a server-generated name so the client-supplied path cannot escape the upload directory.
     safe_filename = f"{uuid.uuid4().hex}{file_ext}"
     file_path = str(UPLOAD_DIR / safe_filename)
+    # Strip any directory components from the original name — used for
+    # metadata only (source/filename fields in PGVector), never for I/O.
+    safe_original_name = Path(file.filename).name
 
     try:
         with open(file_path, "wb") as buffer:
@@ -482,7 +485,7 @@ async def upload_docs_RAG(file: UploadFile = File(...)):
 
         print(f"File saved: {file_path}")
 
-        upload_docs_pipeline(file_paths=[file_path])
+        upload_docs_pipeline(file_paths=[file_path], original_filename=safe_original_name)
 
         if os.path.exists(file_path):
             os.remove(file_path)
