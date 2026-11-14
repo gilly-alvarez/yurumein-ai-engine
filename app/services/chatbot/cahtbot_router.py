@@ -456,11 +456,9 @@ async def archive_session(
         raise HTTPException(status_code=500, detail=f"Failed to archive session: {str(e)}")
 
 
-@router.post('/upload_docs')
+@router.post('/upload_docs', dependencies=[Depends(require_admin_key)])
 async def upload_docs_RAG(file: UploadFile = File(...)):
-    """
-   Upload and process documents for RAG
-    """
+    """Upload and process documents for RAG. Requires X-Admin-Key."""
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -474,7 +472,9 @@ async def upload_docs_RAG(file: UploadFile = File(...)):
     CURRENT_DIR = Path(__file__).resolve().parent
     UPLOAD_DIR = CURRENT_DIR / ".." / "utils" / "RAG_pipeline" / "data" / "new_docs"
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    # Use a server-generated name so the client-supplied path cannot escape the upload directory.
+    safe_filename = f"{uuid.uuid4().hex}{file_ext}"
+    file_path = str(UPLOAD_DIR / safe_filename)
 
     try:
         with open(file_path, "wb") as buffer:
