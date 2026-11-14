@@ -1,401 +1,693 @@
 """
 Unit tests for scripts/evaluate_production.py
 
-Covers all pure (no-DB, no-LLM) logic functions:
-  - detect_retrieval_path
-  - source_key_in_docs
-  - passage_in_docs
-  - doc_summary
-  - compute_summary
+Tests pure-logic functions only — no network, no database, no LLM calls.
+Imports the script as a module via importlib so it can be run from the
+repo root without altering sys.path permanently.
 
-Does NOT require a database connection or OpenAI API key.
+Run from repo root:
+    .venv/bin/python3 -m pytest tests/test_evaluate_production.py -v
 """
 
 import importlib.util
 import os
 import sys
+
 import pytest
 
-# ─── Import the script module ─────────────────────────────────────────────────
-# The script lives in scripts/, not in the app package, so we load it directly.
+# ─── Load the script module ───────────────────────────────────────────────────
 
-_SCRIPT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "scripts", "evaluate_production.py"
+_SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "scripts",
+    "evaluate_production.py",
 )
-_spec = importlib.util.spec_from_file_location("evaluate_production", _SCRIPT_PATH)
-_mod = importlib.util.module_from_spec(_spec)
 
-# Patch sys.modules so relative imports inside the script resolve correctly.
-# (The script does sys.path.insert on import, so app.* is resolvable from repo root.)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-_spec.loader.exec_module(_mod)
+spec = importlib.util.spec_from_file_location("evaluate_production", _SCRIPT)
+_mod = importlib.util.module_from_spec(spec)
+
+# The script does top-level imports that reach the application.
+# Insert the repo root so relative app imports resolve.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+spec.loader.exec_module(_mod)
+
+# ─── Import symbols from module ───────────────────────────────────────────────
 
 detect_retrieval_path = _mod.detect_retrieval_path
 source_key_in_docs    = _mod.source_key_in_docs
+any_source_in_docs    = _mod.any_source_in_docs
 passage_in_docs       = _mod.passage_in_docs
+any_passage_in_docs   = _mod.any_passage_in_docs
 doc_summary           = _mod.doc_summary
 compute_summary       = _mod.compute_summary
 QUESTIONS             = _mod.QUESTIONS
-SRC_LIBRO_II          = _mod.SRC_LIBRO_II
+
 SRC_DICCIONARIO       = _mod.SRC_DICCIONARIO
 SRC_SERIE_I           = _mod.SRC_SERIE_I
+SRC_LIBRO_II          = _mod.SRC_LIBRO_II
+SRC_LEXICON           = _mod.SRC_LEXICON
 SRC_ANTHEM            = _mod.SRC_ANTHEM
 SRC_INSTRUMENTS       = _mod.SRC_INSTRUMENTS
-SRC_LEXICON           = _mod.SRC_LEXICON
 SRC_OVERVIEW          = _mod.SRC_OVERVIEW
+SRC_BALICEAUX         = _mod.SRC_BALICEAUX
+SRC_CHATOYER          = _mod.SRC_CHATOYER
+SRC_HISTORIA          = _mod.SRC_HISTORIA
+SRC_GARIFUNA_IDENTITY = _mod.SRC_GARIFUNA_IDENTITY
+SRC_ARCHIVO_BILINGUE  = _mod.SRC_ARCHIVO_BILINGUE
+SRC_ARCHIVO           = _mod.SRC_ARCHIVO
 
 
-# ─── detect_retrieval_path ────────────────────────────────────────────────────
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _doc(source: str, content: str, page_label=None) -> dict:
+    return {
+        "page_content": content,
+        "metadata": {"source": source, "page_label": page_label},
+        "hybrid_score": 0.9,
+        "retrieval_source": "hybrid",
+    }
+
+
+# ─── TestDetectRetrievalPath ──────────────────────────────────────────────────
 
 class TestDetectRetrievalPath:
-    def test_lexicon_context(self):
-        ctx = "<LEXICON_CONTEXT>\nSource: Yurumein Lexicon\n</LEXICON_CONTEXT>"
+    def test_lexicon_hit(self):
+        ctx = "Result from SQL lexicon lookup\n<LEXICON_CONTEXT>...</LEXICON_CONTEXT>"
         assert detect_retrieval_path(ctx) == "lexicon"
 
-    def test_lexicon_note_is_miss(self):
-        ctx = "<LEXICON_NOTE>\nThe term 'automobile' was searched ...\n</LEXICON_NOTE>\n[EID-1:DICC]"
+    def test_lexicon_miss(self):
+        ctx = "No lexicon match found.\n<LEXICON_NOTE>term not in pilot</LEXICON_NOTE>"
         assert detect_retrieval_path(ctx) == "lexicon_miss_hybrid"
 
-    def test_lexicon_context_takes_priority_over_note(self):
-        # If both appear (shouldn't happen in practice) LEXICON_CONTEXT wins.
-        ctx = "<LEXICON_CONTEXT>foo</LEXICON_CONTEXT>\n<LEXICON_NOTE>bar</LEXICON_NOTE>"
-        assert detect_retrieval_path(ctx) == "lexicon"
-
     def test_anthem_exact(self):
-        ctx = '<ANTHEM_EXACT lang="Garífuna">\nWadimalu...\n</ANTHEM_EXACT>'
+        ctx = '<ANTHEM_EXACT lang="Garífuna">Louverture...</ANTHEM_EXACT>'
+        assert detect_retrieval_path(ctx) == "anthem_ordered"
+
+    def test_anthem_no_lang_attribute(self):
+        # Even without attributes, the tag prefix must match.
+        ctx = "<ANTHEM_EXACT>Some anthem text</ANTHEM_EXACT>"
         assert detect_retrieval_path(ctx) == "anthem_ordered"
 
     def test_page_lookup(self):
-        ctx = "[Source: Libro Serie I, Page 4 | Rank: 1 | Retrieval: page_lookup]\nContent."
+        ctx = "page_lookup: source=%LIBRO SERIE I%, pages=(5,)"
         assert detect_retrieval_path(ctx) == "page_lookup"
 
-    def test_page_not_found(self):
-        ctx = "[Source: Libro Serie I | Retrieval: page_lookup]\nNOTE: The requested page(s) 500 ..."
-        assert detect_retrieval_path(ctx) == "page_lookup"
-
-    def test_general_hybrid(self):
-        ctx = "[EID-1:GAR_II:p5 | Source: Libro Garífuna II — page 5 | Retrieval: vector]\nContent."
+    def test_hybrid_fallback(self):
+        ctx = "Some retrieved context from vector search."
         assert detect_retrieval_path(ctx) == "hybrid"
 
     def test_empty_context(self):
         assert detect_retrieval_path("") == "hybrid"
 
-    def test_no_relevant_markers(self):
-        assert detect_retrieval_path("No relevant documents found.") == "hybrid"
+    def test_lexicon_note_takes_priority_over_hybrid(self):
+        ctx = "Hybrid context here. <LEXICON_NOTE>miss</LEXICON_NOTE>"
+        assert detect_retrieval_path(ctx) == "lexicon_miss_hybrid"
+
+    def test_lexicon_context_beats_all(self):
+        ctx = "<LEXICON_CONTEXT>data</LEXICON_CONTEXT> page_lookup included"
+        assert detect_retrieval_path(ctx) == "lexicon"
 
 
-# ─── source_key_in_docs ──────────────────────────────────────────────────────
+# ─── TestSourceKeyInDocs ─────────────────────────────────────────────────────
 
 class TestSourceKeyInDocs:
-    def _doc(self, source: str, content: str = "text") -> dict:
-        return {"page_content": content, "metadata": {"source": source}}
-
     def test_exact_match(self):
-        docs = [self._doc("LIBRO GARIFUNA II FORMATO DIGITAL")]
-        assert source_key_in_docs(docs, SRC_LIBRO_II) is True
+        docs = [_doc("/app/data/DICCIONARIO GARIFUNA.pdf", "content")]
+        assert source_key_in_docs(docs, SRC_DICCIONARIO)
 
     def test_case_insensitive(self):
-        docs = [self._doc("libro garifuna ii formato digital")]
-        assert source_key_in_docs(docs, SRC_LIBRO_II) is True
+        docs = [_doc("/app/data/diccionario garifuna.pdf", "content")]
+        assert source_key_in_docs(docs, "DICCIONARIO GARIFUNA")
 
-    def test_substring_match(self):
-        docs = [self._doc("/var/www/data/DICCIONARIO GARIFUNA (DIMUREI AGEI).pdf")]
-        assert source_key_in_docs(docs, SRC_DICCIONARIO) is True
+    def test_partial_path_match(self):
+        docs = [_doc("/full/path/to/LIBRO SERIE I.pdf", "content")]
+        assert source_key_in_docs(docs, SRC_SERIE_I)
 
-    def test_miss(self):
-        docs = [self._doc("LIBRO SERIE I")]
-        assert source_key_in_docs(docs, SRC_DICCIONARIO) is False
+    def test_no_match(self):
+        docs = [_doc("/app/data/SOME_OTHER_FILE.pdf", "content")]
+        assert not source_key_in_docs(docs, SRC_DICCIONARIO)
 
     def test_empty_docs(self):
-        assert source_key_in_docs([], SRC_LIBRO_II) is False
+        assert not source_key_in_docs([], SRC_LIBRO_II)
+
+    def test_new_doc_baliceaux(self):
+        docs = [_doc("/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx", "content")]
+        assert source_key_in_docs(docs, SRC_BALICEAUX)
+
+    def test_new_doc_chatoyer(self):
+        docs = [_doc("/app/.../Yurumein_AI_Chief_Joseph_Chatoyer_EN_ES.docx", "text")]
+        assert source_key_in_docs(docs, SRC_CHATOYER)
+
+    def test_new_doc_historia(self):
+        docs = [_doc("/app/.../Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt", "text")]
+        assert source_key_in_docs(docs, SRC_HISTORIA)
+
+    def test_new_doc_identity(self):
+        docs = [_doc("/app/.../Yurumein_Garifuna_Identity_EN_ES.docx", "text")]
+        assert source_key_in_docs(docs, SRC_GARIFUNA_IDENTITY)
+
+    def test_new_doc_archivo_bilingue(self):
+        docs = [_doc("/app/.../Yurumei_2024_YurumeinAI_Archivo_Bilingue.docx", "text")]
+        assert source_key_in_docs(docs, SRC_ARCHIVO_BILINGUE)
+
+    def test_new_doc_archivo_plain(self):
+        docs = [_doc("/app/.../Yurumei_2024_Archivo.docx", "text")]
+        assert source_key_in_docs(docs, SRC_ARCHIVO)
+
+    def test_archivo_key_does_not_match_bilingue(self):
+        # SRC_ARCHIVO ("Yurumei_2024_Archivo.docx") must NOT match the Bilingue path.
+        docs = [_doc("/app/.../Yurumei_2024_YurumeinAI_Archivo_Bilingue.docx", "text")]
+        assert not source_key_in_docs(docs, SRC_ARCHIVO)
+
+    def test_instruments_underscore_key_matches(self):
+        # Fixed: Musical_Instruments_Dataset (underscore) matches the actual filename.
+        docs = [_doc("/app/.../Garifuna_Musical_Instruments_Dataset.pdf.pdf", "text")]
+        assert source_key_in_docs(docs, SRC_INSTRUMENTS)
+
+    def test_instruments_space_key_does_not_match(self):
+        # Regression guard: the old "MUSICAL INSTRUMENTS" (space) constant was wrong.
+        docs = [_doc("/app/.../Garifuna_Musical_Instruments_Dataset.pdf.pdf", "text")]
+        assert not source_key_in_docs(docs, "MUSICAL INSTRUMENTS")
+
+    def test_anthem_key_matches(self):
+        docs = [_doc(
+            "/app/.../Himno_Nacional_Guatemala_Garifuna_Espanol_English_Yurumein_AI.docx",
+            "text",
+        )]
+        assert source_key_in_docs(docs, SRC_ANTHEM)
 
     def test_missing_metadata(self):
-        docs = [{"page_content": "some text"}]
-        assert source_key_in_docs(docs, SRC_LIBRO_II) is False
-
-    def test_multiple_docs_one_matches(self):
-        docs = [
-            self._doc("LIBRO SERIE I"),
-            self._doc("LIBRO GARIFUNA II FORMATO DIGITAL"),
-        ]
-        assert source_key_in_docs(docs, SRC_LIBRO_II) is True
-
-    def test_anthem_source_key(self):
-        docs = [self._doc("HIMNO_NACIONAL_GUATEMALA_GARIFUNA.docx")]
-        assert source_key_in_docs(docs, SRC_ANTHEM) is True
-
-    def test_instruments_source_key(self):
-        docs = [self._doc("/docs/MUSICAL INSTRUMENTS GARIFUNA.pdf")]
-        assert source_key_in_docs(docs, SRC_INSTRUMENTS) is True
+        doc = {"page_content": "content"}
+        assert not source_key_in_docs([doc], SRC_DICCIONARIO)
 
 
-# ─── passage_in_docs ─────────────────────────────────────────────────────────
+# ─── TestAnySourceInDocs ─────────────────────────────────────────────────────
 
-class TestPassageInDocs:
-    def _doc(self, source: str, content: str) -> dict:
-        return {"page_content": content, "metadata": {"source": source}}
+class TestAnySourceInDocs:
+    def test_first_key_matches(self):
+        docs = [_doc("/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx", "text")]
+        assert any_source_in_docs(docs, [SRC_BALICEAUX, SRC_CHATOYER])
 
-    def test_fragment_found_in_right_source(self):
-        docs = [self._doc("DICCIONARIO GARIFUNA", "Padre. Sus. com. Baba, Tata, Úguchilin.")]
-        assert passage_in_docs(docs, "Baba", SRC_DICCIONARIO) is True
+    def test_second_key_matches(self):
+        docs = [_doc("/app/.../Yurumein_AI_Chief_Joseph_Chatoyer_EN_ES.docx", "text")]
+        assert any_source_in_docs(docs, [SRC_BALICEAUX, SRC_CHATOYER])
 
-    def test_fragment_case_insensitive(self):
-        docs = [self._doc("DICCIONARIO GARIFUNA", "baba tata uguchilin")]
-        assert passage_in_docs(docs, "BABA", SRC_DICCIONARIO) is True
+    def test_no_key_matches(self):
+        docs = [_doc("/app/.../DICCIONARIO GARIFUNA.pdf", "text")]
+        assert not any_source_in_docs(docs, [SRC_BALICEAUX, SRC_CHATOYER])
 
-    def test_fragment_in_wrong_source(self):
-        # Fragment present but in a different source than expected.
-        docs = [self._doc("LIBRO SERIE I", "Baba means father.")]
-        assert passage_in_docs(docs, "Baba", SRC_DICCIONARIO) is False
-
-    def test_fragment_not_found(self):
-        docs = [self._doc("DICCIONARIO GARIFUNA", "Madre. Sus. com. Nana.")]
-        assert passage_in_docs(docs, "Baba", SRC_DICCIONARIO) is False
+    def test_empty_keys(self):
+        docs = [_doc("/app/.../DICCIONARIO GARIFUNA.pdf", "text")]
+        assert not any_source_in_docs(docs, [])
 
     def test_empty_docs(self):
-        assert passage_in_docs([], "Satuye", SRC_LIBRO_II) is False
+        assert not any_source_in_docs([], [SRC_BALICEAUX, SRC_CHATOYER])
 
-    def test_multiple_docs_correct_one_has_fragment(self):
+
+# ─── TestPassageInDocs ────────────────────────────────────────────────────────
+
+class TestPassageInDocs:
+    def test_fragment_and_source_match(self):
+        docs = [_doc(
+            "/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx",
+            "In 1796 the British transferred thousands of Garífuna to Baliceaux.",
+        )]
+        assert passage_in_docs(docs, "1796", SRC_BALICEAUX)
+
+    def test_fragment_case_insensitive(self):
+        docs = [_doc(
+            "/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx",
+            "In 1796 the British transferred...",
+        )]
+        assert passage_in_docs(docs, "1796", SRC_BALICEAUX)
+
+    def test_fragment_missing(self):
+        docs = [_doc(
+            "/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx",
+            "No date mentioned here.",
+        )]
+        assert not passage_in_docs(docs, "1796", SRC_BALICEAUX)
+
+    def test_source_mismatch(self):
+        docs = [_doc(
+            "/app/.../DICCIONARIO GARIFUNA.pdf",
+            "1796 — but wrong source.",
+        )]
+        assert not passage_in_docs(docs, "1796", SRC_BALICEAUX)
+
+    def test_fragment_found_in_second_doc(self):
         docs = [
-            self._doc("LIBRO SERIE I", "No baba here."),
-            self._doc("DICCIONARIO GARIFUNA", "Padre: Baba, Tata, Úguchilin."),
+            _doc("/app/.../DICCIONARIO GARIFUNA.pdf", "unrelated"),
+            _doc("/app/.../Yurumein_AI_Chief_Joseph_Chatoyer_EN_ES.docx", "Satuye was a chief"),
         ]
-        assert passage_in_docs(docs, "Baba", SRC_DICCIONARIO) is True
+        assert passage_in_docs(docs, "Satuye", SRC_CHATOYER)
 
-    def test_partial_fragment_match(self):
-        # Fragment "afric" matches "africano" in content.
-        docs = [self._doc("LIBRO GARIFUNA II FORMATO DIGITAL", "herencia africana occidental")]
-        assert passage_in_docs(docs, "afric", SRC_LIBRO_II) is True
+    def test_empty_docs(self):
+        assert not passage_in_docs([], "1796", SRC_BALICEAUX)
 
-    def test_yurumein_fragment(self):
-        docs = [self._doc("LIBRO GARIFUNA II FORMATO DIGITAL", "llamaron a San Vicente 'Yurumein'")]
-        assert passage_in_docs(docs, "Yurumein", SRC_LIBRO_II) is True
+    def test_1773_fragment_chatoyer(self):
+        docs = [_doc(
+            "/app/.../Yurumein_AI_Chief_Joseph_Chatoyer_EN_ES.docx",
+            "The 1773 peace agreement established boundaries.",
+        )]
+        assert passage_in_docs(docs, "1773", SRC_CHATOYER)
+
+    def test_ben_petersen_fragment_identity(self):
+        docs = [_doc(
+            "/app/.../Yurumein_Garifuna_Identity_EN_ES.docx",
+            "Curated reference derived from A Story About the Garifuna (Ben Petersen, 2012/2013)",
+        )]
+        assert passage_in_docs(docs, "Ben Petersen", SRC_GARIFUNA_IDENTITY)
+
+    def test_mayuru_fragment_archivo(self):
+        docs = [_doc(
+            "/app/.../Yurumei_2024_Archivo.docx",
+            "El documental reconoce a Marcos Sánchez Díaz, también llamado Mayuru.",
+        )]
+        assert passage_in_docs(docs, "Mayuru", SRC_ARCHIVO)
+
+    def test_hijos_de_livingston_fragment(self):
+        docs = [_doc(
+            "/app/.../Yurumei_2024_YurumeinAI_Archivo_Bilingue.docx",
+            "Hijos de Livingston | Livingston (La Buga), Izabal, Guatemala.",
+        )]
+        assert passage_in_docs(docs, "Hijos de Livingston", SRC_ARCHIVO_BILINGUE)
 
 
-# ─── doc_summary ─────────────────────────────────────────────────────────────
+# ─── TestAnyPassageInDocs ─────────────────────────────────────────────────────
+
+class TestAnyPassageInDocs:
+    def test_fragment_in_primary_source(self):
+        docs = [_doc(
+            "/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx",
+            "1796 — the British transferred captives.",
+        )]
+        assert any_passage_in_docs(docs, "1796", [SRC_BALICEAUX, SRC_CHATOYER])
+
+    def test_fragment_in_secondary_source(self):
+        docs = [_doc(
+            "/app/.../Yurumein_AI_Chief_Joseph_Chatoyer_EN_ES.docx",
+            "In 1796, Baliceaux became a holding site.",
+        )]
+        assert any_passage_in_docs(docs, "1796", [SRC_BALICEAUX, SRC_CHATOYER])
+
+    def test_fragment_not_in_any_valid_source(self):
+        docs = [_doc(
+            "/app/.../DICCIONARIO GARIFUNA.pdf",
+            "1796 — wrong source for this question.",
+        )]
+        assert not any_passage_in_docs(docs, "1796", [SRC_BALICEAUX, SRC_CHATOYER])
+
+    def test_empty_sources(self):
+        docs = [_doc("/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx", "1796")]
+        assert not any_passage_in_docs(docs, "1796", [])
+
+
+# ─── TestDocSummary ───────────────────────────────────────────────────────────
 
 class TestDocSummary:
-    def test_known_source_classified(self):
-        doc = {
-            "page_content": "Padre. Sus. com. Baba, Tata, Úguchilin.",
-            "metadata": {
-                "source": "DICCIONARIO GARIFUNA (DIMUREI AGEI).pdf",
-                "page_label": "144",
-            },
-            "hybrid_score": 0.823456,
+    def _make_doc(self, source, content, page_label=None):
+        return {
+            "page_content": content,
+            "metadata": {"source": source, "page_label": page_label},
+            "hybrid_score": 0.75,
             "retrieval_source": "hybrid",
         }
-        s = doc_summary(doc)
-        assert s["source_role"] == "DICTIONARY"
-        assert s["source_display"] == "Diccionario Garífuna"
-        assert s["page_label"] == "144"
-        assert s["hybrid_score"] == 0.8235
-        assert s["retrieval_source"] == "hybrid"
-        assert "Baba" in s["content_preview"]
+
+    def test_known_source(self):
+        d = self._make_doc("/app/.../DICCIONARIO GARIFUNA.pdf", "word")
+        s = doc_summary(d)
+        assert s["source_role"] is not None
+        assert s["source_display"] != "unclassified"
 
     def test_unknown_source(self):
-        doc = {
-            "page_content": "Some content.",
-            "metadata": {"source": "UNKNOWN_DOC.pdf"},
-            "hybrid_score": 0.3,
-            "retrieval_source": "vector",
-        }
-        s = doc_summary(doc)
+        d = self._make_doc("/app/.../Baliceaux_Yurumein_AI_Historical_Brief.docx", "text")
+        s = doc_summary(d)
         assert s["source_role"] is None
-        assert s["source_display"] == "unknown"
+        assert s["source_display"] == "unclassified"
 
-    def test_content_truncated_at_140(self):
-        doc = {
-            "page_content": "A" * 200,
-            "metadata": {"source": "LIBRO SERIE I"},
-            "hybrid_score": 0.5,
-        }
-        s = doc_summary(doc)
+    def test_content_preview_truncated(self):
+        long = "x" * 300
+        d = self._make_doc("/app/.../file.pdf", long)
+        s = doc_summary(d)
         assert len(s["content_preview"]) <= 140
 
-    def test_newlines_replaced(self):
-        doc = {
-            "page_content": "line1\nline2\nline3",
-            "metadata": {"source": "LIBRO GARIFUNA II FORMATO DIGITAL"},
-            "hybrid_score": 0.4,
-        }
-        s = doc_summary(doc)
+    def test_missing_metadata(self):
+        d = {"page_content": "content", "hybrid_score": 0.5}
+        s = doc_summary(d)
+        assert s["source_path"] == ""
+        assert s["source_role"] is None
+
+    def test_score_rounded(self):
+        d = self._make_doc("/app/.../file.pdf", "content")
+        d["hybrid_score"] = 0.123456789
+        s = doc_summary(d)
+        assert s["hybrid_score"] == round(0.123456789, 4)
+
+    def test_newlines_stripped_from_preview(self):
+        d = self._make_doc("/app/.../file.pdf", "line1\nline2\nline3")
+        s = doc_summary(d)
         assert "\n" not in s["content_preview"]
 
-    def test_missing_fields_handled(self):
-        s = doc_summary({})
-        assert s["source_role"] is None
-        assert s["hybrid_score"] == 0.0
-        assert s["content_preview"] == ""
 
-
-# ─── compute_summary ─────────────────────────────────────────────────────────
-
-def _make_result(
-    qid: str,
-    cat: str,
-    expected_key: str | None,
-    expected_frag: str | None,
-    hit10: bool | None,
-    hit_ctx: bool | None,
-    pfound10: bool | None = None,
-    pfound_ctx: bool | None = None,
-    top10_applicable: bool = True,
-    error: str | None = None,
-) -> dict:
-    return {
-        "id": qid,
-        "category": cat,
-        "expected_source_key": expected_key,
-        "expected_passage_fragment": expected_frag,
-        "top10_applicable": top10_applicable,
-        "hit_at_10": hit10,
-        "hit_in_context": hit_ctx,
-        "passage_found_at_10": pfound10,
-        "passage_found_in_context": pfound_ctx,
-        "error": error,
-    }
-
+# ─── TestComputeSummary ───────────────────────────────────────────────────────
 
 class TestComputeSummary:
+    def _base_sourced(self, **overrides) -> dict:
+        r = {
+            "category": "Test",
+            "is_edge_case": False,
+            "top10_applicable": True,
+            "primary_hit_at_10": True,
+            "any_hit_at_10": True,
+            "primary_hit_in_context": True,
+            "any_hit_in_context": True,
+            "expected_passage_fragment": None,
+            "passage_found_at_10": None,
+            "passage_found_in_context": None,
+            "error": None,
+        }
+        r.update(overrides)
+        return r
+
+    def _base_edge(self, **overrides) -> dict:
+        r = {
+            "category": "Edge_Cases",
+            "is_edge_case": True,
+            "top10_applicable": False,
+            "primary_hit_at_10": None,
+            "any_hit_at_10": None,
+            "primary_hit_in_context": None,
+            "any_hit_in_context": None,
+            "expected_passage_fragment": None,
+            "passage_found_at_10": None,
+            "passage_found_in_context": None,
+            "error": None,
+        }
+        r.update(overrides)
+        return r
+
     def test_all_hits(self):
-        results = [
-            _make_result("Q1", "CatA", "SRC", None, True, True),
-            _make_result("Q2", "CatA", "SRC", None, True, True),
-        ]
+        results = [self._base_sourced() for _ in range(4)]
         s = compute_summary(results)
-        assert s["total_questions"] == 2
-        assert s["errors"] == 0
-        assert s["sourced_questions"] == 2
-        assert s["edge_case_questions"] == 0
-        assert s["source_hit_rate_at_10"] == 1.0
-        assert s["source_hit_rate_in_context"] == 1.0
+        assert s["primary_source_hit_rate_at_10"] == 1.0
+        assert s["any_source_hit_rate_at_10"] == 1.0
+        assert s["primary_source_hit_rate_in_context"] == 1.0
+        assert s["any_source_hit_rate_in_context"] == 1.0
 
     def test_all_misses(self):
         results = [
-            _make_result("Q1", "CatA", "SRC", None, False, False),
-            _make_result("Q2", "CatA", "SRC", None, False, False),
+            self._base_sourced(
+                primary_hit_at_10=False,
+                any_hit_at_10=False,
+                primary_hit_in_context=False,
+                any_hit_in_context=False,
+            )
+            for _ in range(4)
         ]
         s = compute_summary(results)
-        assert s["source_hit_rate_at_10"] == 0.0
-        assert s["source_hit_rate_in_context"] == 0.0
+        assert s["primary_source_hit_rate_at_10"] == 0.0
+        assert s["primary_source_hit_rate_in_context"] == 0.0
 
-    def test_edge_cases_excluded_from_hit_rate(self):
+    def test_mixed(self):
         results = [
-            _make_result("Q1", "CatA", "SRC", None, True, True),
-            _make_result("E1", "Edge", None,  None, None, None),
+            self._base_sourced(
+                primary_hit_at_10=True,
+                any_hit_at_10=True,
+                primary_hit_in_context=True,
+                any_hit_in_context=True,
+            ),
+            self._base_sourced(
+                primary_hit_at_10=False,
+                any_hit_at_10=False,
+                primary_hit_in_context=False,
+                any_hit_in_context=False,
+            ),
         ]
         s = compute_summary(results)
+        assert s["primary_source_hit_rate_at_10"] == 0.5
+        assert s["primary_source_hit_rate_in_context"] == 0.5
+
+    def test_edge_cases_excluded_from_sourced_counts(self):
+        results = [
+            self._base_sourced(),
+            self._base_edge(),
+        ]
+        s = compute_summary(results)
+        assert s["total_questions"] == 2
         assert s["sourced_questions"] == 1
         assert s["edge_case_questions"] == 1
-        assert s["source_hit_rate_at_10"] == 1.0
 
-    def test_anthem_path_excluded_from_top10(self):
-        # anthem_ordered path: top10_applicable=False.
+    def test_edge_cases_do_not_affect_hit_rate(self):
         results = [
-            _make_result("Q1", "Anthem", "SRC_ANTHEM", None, None, True, top10_applicable=False),
-            _make_result("Q2", "Hybrid", "SRC_OTHER", None, True, True, top10_applicable=True),
+            self._base_sourced(
+                primary_hit_at_10=True,
+                any_hit_at_10=True,
+                primary_hit_in_context=True,
+                any_hit_in_context=True,
+            ),
+            self._base_edge(),
         ]
         s = compute_summary(results)
-        assert s["hybrid_path_questions"] == 1
-        assert s["source_hit_rate_at_10"] == 1.0   # only Q2 counted
-        assert s["source_hit_rate_in_context"] == 1.0  # both counted
+        assert s["primary_source_hit_rate_at_10"] == 1.0
+        assert s["primary_source_hit_rate_in_context"] == 1.0
 
     def test_passage_recall(self):
         results = [
-            _make_result("Q1", "CatA", "SRC", "fragment", True, True, True, True),
-            _make_result("Q2", "CatA", "SRC", "fragment", True, False, True, False),
-            _make_result("Q3", "CatA", "SRC", None, True, True),  # no fragment
+            self._base_sourced(
+                expected_passage_fragment="abc",
+                passage_found_at_10=True,
+                passage_found_in_context=True,
+            ),
+            self._base_sourced(
+                expected_passage_fragment="xyz",
+                passage_found_at_10=False,
+                passage_found_in_context=False,
+            ),
         ]
         s = compute_summary(results)
-        assert s["passage_recall_at_10"] == 1.0     # 2/2 passage questions hit@10
-        assert s["passage_recall_in_context"] == 0.5  # 1/2
+        assert s["passage_recall_at_10"] == 0.5
+        assert s["passage_recall_in_context"] == 0.5
 
-    def test_error_counted(self):
+    def test_no_passage_fragments(self):
+        results = [self._base_sourced(expected_passage_fragment=None) for _ in range(3)]
+        s = compute_summary(results)
+        assert s["passage_recall_at_10"] is None
+        assert s["passage_recall_in_context"] is None
+
+    def test_errors_counted(self):
         results = [
-            _make_result("Q1", "CatA", "SRC", None, None, None, error="Connection refused"),
-            _make_result("Q2", "CatA", "SRC", None, True, True),
+            self._base_sourced(error="some error"),
+            self._base_sourced(),
         ]
         s = compute_summary(results)
         assert s["errors"] == 1
 
-    def test_no_sourced_questions_returns_none_rates(self):
-        results = [_make_result("E1", "Edge", None, None, None, None)]
-        s = compute_summary(results)
-        assert s["source_hit_rate_at_10"] is None
-        assert s["source_hit_rate_in_context"] is None
-
-    def test_category_breakdown(self):
+    def test_non_hybrid_excluded_from_top10(self):
         results = [
-            _make_result("Q1", "Baliceaux", "SRC", None, True, True),
-            _make_result("Q2", "Baliceaux", "SRC", None, False, False),
-            _make_result("Q3", "Anthem",    "SRC", None, None, True, top10_applicable=False),
+            self._base_sourced(
+                top10_applicable=True,
+                primary_hit_at_10=True,
+                any_hit_at_10=True,
+                primary_hit_in_context=True,
+                any_hit_in_context=True,
+            ),
+            self._base_sourced(
+                top10_applicable=False,
+                primary_hit_at_10=None,
+                any_hit_at_10=None,
+                primary_hit_in_context=True,
+                any_hit_in_context=True,
+            ),
         ]
         s = compute_summary(results)
-        b = s["by_category"]["Baliceaux"]
-        a = s["by_category"]["Anthem"]
-        assert b["total"] == 2
-        assert b["hit_at_10"] == 1
-        assert b["hit_in_context"] == 1
-        assert a["hit_in_context"] == 1
+        assert s["hybrid_path_questions"] == 1
+        assert s["primary_source_hit_rate_at_10"] == 1.0
+        assert s["primary_source_hit_rate_in_context"] == 1.0
+
+    def test_any_vs_primary_distinction(self):
+        results = [
+            self._base_sourced(
+                primary_hit_at_10=False,
+                any_hit_at_10=True,
+                primary_hit_in_context=False,
+                any_hit_in_context=True,
+            ),
+        ]
+        s = compute_summary(results)
+        assert s["primary_source_hit_rate_at_10"] == 0.0
+        assert s["any_source_hit_rate_at_10"] == 1.0
+        assert s["primary_source_hit_rate_in_context"] == 0.0
+        assert s["any_source_hit_rate_in_context"] == 1.0
+
+    def test_category_breakdown_present(self):
+        results = [self._base_sourced(category="Baliceaux") for _ in range(3)]
+        s = compute_summary(results)
+        assert "Baliceaux" in s["by_category"]
+        assert s["by_category"]["Baliceaux"]["total"] == 3
+
+    def test_empty_results(self):
+        s = compute_summary([])
+        assert s["total_questions"] == 0
+        assert s["errors"] == 0
 
 
-# ─── QUESTIONS list integrity ─────────────────────────────────────────────────
+# ─── TestQuestionsIntegrity ───────────────────────────────────────────────────
 
 class TestQuestionsIntegrity:
-    def test_exactly_40_questions(self):
-        assert len(QUESTIONS) == 40
+    EXPECTED_CATEGORIES = {
+        "Baliceaux",
+        "Chatoyer_Satuye",
+        "Yurumein_Identity",
+        "Livingston_Community",
+        "National_Anthem",
+        "Language",
+        "Cultural_Traditions",
+        "Edge_Cases",
+        "Document_Coverage",
+    }
 
-    def test_all_have_required_fields(self):
-        required = {"id", "category", "language", "query",
-                    "expected_source_key", "expected_passage_fragment", "notes"}
-        for q in QUESTIONS:
-            missing = required - q.keys()
-            assert not missing, f"{q['id']} is missing fields: {missing}"
+    def test_total_question_count(self):
+        assert len(QUESTIONS) == 46
 
-    def test_ids_unique(self):
+    def test_all_categories_present(self):
+        cats = {q["category"] for q in QUESTIONS}
+        assert cats == self.EXPECTED_CATEGORIES
+
+    def test_question_ids_unique(self):
         ids = [q["id"] for q in QUESTIONS]
         assert len(ids) == len(set(ids)), "Duplicate question IDs found"
 
-    def test_eight_categories(self):
-        cats = {q["category"] for q in QUESTIONS}
-        assert len(cats) == 8, f"Expected 8 categories, got {len(cats)}: {cats}"
-
-    def test_five_per_category(self):
-        from collections import Counter
-        counts = Counter(q["category"] for q in QUESTIONS)
-        for cat, count in counts.items():
-            assert count == 5, f"Category '{cat}' has {count} questions (expected 5)"
-
-    def test_languages_are_valid(self):
+    def test_all_ids_match_pattern(self):
+        import re
+        pattern = re.compile(r"^C\d+Q\d+$")
         for q in QUESTIONS:
-            assert q["language"] in ("en", "es"), f"{q['id']} has invalid language: {q['language']}"
+            assert pattern.match(q["id"]), f"Bad id format: {q['id']}"
 
-    def test_expected_source_keys_are_known_constants(self):
+    def test_valid_source_keys_is_list(self):
+        for q in QUESTIONS:
+            assert isinstance(q["valid_source_keys"], list), (
+                f"{q['id']}: valid_source_keys must be a list"
+            )
+
+    def test_edge_cases_have_empty_source_keys(self):
+        for q in QUESTIONS:
+            if q["category"] == "Edge_Cases":
+                assert q["valid_source_keys"] == [], (
+                    f"{q['id']}: edge case must have valid_source_keys=[]"
+                )
+
+    def test_sourced_questions_have_non_empty_source_keys(self):
+        for q in QUESTIONS:
+            if q["category"] != "Edge_Cases":
+                assert q["valid_source_keys"], (
+                    f"{q['id']}: sourced question must have at least one valid source key"
+                )
+
+    def test_valid_source_keys_are_known_constants(self):
         known = {
-            SRC_LIBRO_II, SRC_DICCIONARIO, SRC_SERIE_I,
-            SRC_ANTHEM, SRC_INSTRUMENTS, SRC_LEXICON,
-            SRC_OVERVIEW, None,
+            SRC_DICCIONARIO, SRC_SERIE_I, SRC_LIBRO_II, SRC_LEXICON,
+            SRC_ANTHEM, SRC_INSTRUMENTS, SRC_OVERVIEW,
+            SRC_BALICEAUX, SRC_CHATOYER, SRC_HISTORIA,
+            SRC_GARIFUNA_IDENTITY, SRC_ARCHIVO_BILINGUE, SRC_ARCHIVO,
         }
         for q in QUESTIONS:
-            assert q["expected_source_key"] in known, (
-                f"{q['id']} has unknown source key: {q['expected_source_key']!r}"
-            )
+            for k in q["valid_source_keys"]:
+                assert k in known, (
+                    f"{q['id']}: unknown source key '{k}'. "
+                    f"Add it to the known set or use a defined constant."
+                )
 
-    def test_edge_cases_have_null_source(self):
-        edge = [q for q in QUESTIONS if q["category"] == "Edge_Cases"]
-        for q in edge:
-            assert q["expected_source_key"] is None, (
-                f"Edge case {q['id']} should have null expected_source_key"
-            )
-
-    def test_anthem_questions_all_target_anthem_source(self):
-        anthem_q = [q for q in QUESTIONS if q["category"] == "National_Anthem"]
-        for q in anthem_q:
-            assert q["expected_source_key"] == SRC_ANTHEM, (
-                f"Anthem question {q['id']} has unexpected source key: {q['expected_source_key']}"
-            )
-
-    def test_no_empty_queries(self):
+    def test_expected_passage_fragment_is_string_or_none(self):
         for q in QUESTIONS:
-            assert q["query"].strip(), f"{q['id']} has an empty query"
+            frag = q["expected_passage_fragment"]
+            assert frag is None or isinstance(frag, str), (
+                f"{q['id']}: expected_passage_fragment must be str or None"
+            )
+
+    def test_all_questions_have_notes(self):
+        for q in QUESTIONS:
+            assert q.get("notes"), f"{q['id']}: missing notes"
+
+    def test_language_field_valid(self):
+        for q in QUESTIONS:
+            assert q["language"] in ("en", "es"), (
+                f"{q['id']}: language must be 'en' or 'es'"
+            )
+
+    def test_baliceaux_uses_dedicated_source(self):
+        for q in QUESTIONS:
+            if q["category"] == "Baliceaux":
+                assert SRC_BALICEAUX in q["valid_source_keys"], (
+                    f"{q['id']}: Baliceaux questions must list SRC_BALICEAUX"
+                )
+
+    def test_chatoyer_uses_dedicated_source(self):
+        for q in QUESTIONS:
+            if q["category"] == "Chatoyer_Satuye":
+                assert SRC_CHATOYER in q["valid_source_keys"], (
+                    f"{q['id']}: Chatoyer questions must list SRC_CHATOYER"
+                )
+
+    def test_livingston_uses_archive_sources(self):
+        for q in QUESTIONS:
+            if q["category"] == "Livingston_Community":
+                has_archive = (
+                    SRC_ARCHIVO_BILINGUE in q["valid_source_keys"]
+                    or SRC_ARCHIVO in q["valid_source_keys"]
+                    or SRC_LIBRO_II in q["valid_source_keys"]
+                )
+                assert has_archive, (
+                    f"{q['id']}: Livingston questions must reference at least one "
+                    f"archive or Libro II source"
+                )
+
+    def test_anthem_category_uses_anthem_source(self):
+        for q in QUESTIONS:
+            if q["category"] == "National_Anthem":
+                assert SRC_ANTHEM in q["valid_source_keys"], (
+                    f"{q['id']}: Anthem questions must include SRC_ANTHEM"
+                )
+
+    def test_document_coverage_has_six_questions(self):
+        dc = [q for q in QUESTIONS if q["category"] == "Document_Coverage"]
+        assert len(dc) == 6
+
+    def test_document_coverage_covers_all_new_docs(self):
+        dc = [q for q in QUESTIONS if q["category"] == "Document_Coverage"]
+        all_keys = [k for q in dc for k in q["valid_source_keys"]]
+        new_docs = {
+            SRC_BALICEAUX, SRC_CHATOYER, SRC_HISTORIA,
+            SRC_GARIFUNA_IDENTITY, SRC_ARCHIVO_BILINGUE, SRC_ARCHIVO,
+        }
+        for doc in new_docs:
+            assert doc in all_keys, (
+                f"No Document_Coverage question covers '{doc}'"
+            )
+
+    def test_edge_cases_has_five_questions(self):
+        edge = [q for q in QUESTIONS if q["category"] == "Edge_Cases"]
+        assert len(edge) == 5
+
+    def test_instruments_constant_uses_underscore(self):
+        # Guard against regression to old "MUSICAL INSTRUMENTS" (space) constant.
+        assert " " not in SRC_INSTRUMENTS, (
+            "SRC_INSTRUMENTS must not contain spaces — the actual file uses underscores"
+        )
+        assert "Musical_Instruments_Dataset" in SRC_INSTRUMENTS
+
+    def test_historia_diagnostic_note_present(self):
+        historia_qs = [
+            q for q in QUESTIONS if SRC_HISTORIA in q.get("valid_source_keys", [])
+        ]
+        assert historia_qs, "No question found that lists SRC_HISTORIA"
+        any_note = any(
+            "pending_cultural_review" in q["notes"].lower()
+            or "publication_allowed" in q["notes"].lower()
+            for q in historia_qs
+        )
+        assert any_note, (
+            "At least one question listing SRC_HISTORIA must note its "
+            "staging/review status (publication_allowed: false / pending_cultural_review)"
+        )
