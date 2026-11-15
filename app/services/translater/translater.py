@@ -192,15 +192,29 @@ class Translater:
                     return True
         return False
 
-    def _output_grounded_in_context(self, translation: str, context: str) -> bool:
-        """Returns True if at least one meaningful token of the translation appears
-        in the retrieved RAG context. Guards against the word-set check accepting a
-        valid Garífuna word returned for the wrong meaning when the RAG context is
-        unrelated to the requested term (e.g. 'smartphone' → 'Mibi' via number-exercise
-        pages — 'mibi' is a real Garífuna word but not in the number-exercise context)."""
+    def _output_grounded_in_context(self, translation: str, context: str, query_text: str = "") -> bool:
+        """Returns True when the retrieved context supports the LLM translation.
+
+        Condition 1 — input relevance (when query_text is given): at least one
+        normalized token from the input query must appear in the retrieved context.
+        This confirms the context is ABOUT the requested term. Example: for
+        'smartphone', 'smartphone' does not appear in the retrieved technology-
+        vocabulary or number-exercise chunks, so the context cannot support any
+        translation of 'smartphone' even if a valid Garífuna word (e.g. 'Mibi'
+        for landline telephone) happens to appear on the same page.
+
+        Condition 2 — output presence: at least one meaningful translation token
+        must appear in the context (original check)."""
         if not context:
             return False
         ctx_lower = context.lower()
+        if query_text:
+            for tok in query_text.split():
+                q = normalize_term(tok)
+                if len(q) > 2 and q in ctx_lower:
+                    break
+            else:
+                return False  # no query token found in context → context is irrelevant
         for token in (translation or "").split():
             w = token.strip(".,;:!?-()").lower()
             if len(w) > 2 and w not in _SKIP_VALIDATION_TOKENS and w in ctx_lower:
@@ -315,10 +329,10 @@ Provide only the translated output in {target_language}."""
             if is_garifuna_target and not self._output_contains_garifuna_forms(translation_text):
                 return llm_response(translation=decline_msg)
 
-            # Grounding check: at least one translation token must appear in the retrieved
-            # context. Prevents the word-set check from accepting a real Garífuna word that
-            # the model inferred from training data when the RAG context is irrelevant.
-            if is_garifuna_target and not self._output_grounded_in_context(translation_text, context):
+            # Grounding check: translation must be derivable from context that is
+            # actually about the requested term. query_text (the input) is passed so
+            # condition 1 can verify the context is relevant to the query.
+            if is_garifuna_target and not self._output_grounded_in_context(translation_text, context, text):
                 return llm_response(translation=decline_msg)
 
             return validated

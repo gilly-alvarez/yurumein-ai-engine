@@ -784,3 +784,40 @@ class TestOutputGroundingCheck:
         ctx = "duna lidan weyu"
         assert self.t._output_grounded_in_context("Duna.", ctx)
         assert self.t._output_grounded_in_context("(Duna)", ctx)
+
+    # --- Two-condition tests (query_text parameter) ---
+
+    def test_smartphone_declined_when_query_not_in_context(self):
+        """'smartphone' (8 chars) does not appear in the retrieved tech-vocabulary
+        context, so condition 1 fails → grounding returns False → DECLINE.
+        This is the canonical smartphone/Mibi failure case."""
+        tech_vocab_ctx = (
+            "Achiboguagüei Lavadora Afansehatu Dimurei Computadora "
+            "Afansehatu numeru Calculadora Mibi Telefono fijo"
+        )
+        assert not self.t._output_grounded_in_context("Mibi", tech_vocab_ctx, "smartphone")
+
+    def test_garifuna_query_token_grounds_numbers_translation(self):
+        """'garifuna' in query 'numbers in garifuna language' also appears in p203 context
+        → condition 1 passes via 'garifuna'; condition 2 passes via 'numeru'."""
+        assert self.t._output_grounded_in_context(
+            "NUMERU LIDAN GARIFUNA", self._P203_CTX, "numbers in garifuna language"
+        )
+
+    def test_query_token_in_context_allows_translation(self):
+        """When a query token appears in context, condition 1 is satisfied."""
+        ctx = "water is Duna in the garifuna language lidan"
+        assert self.t._output_grounded_in_context("Duna", ctx, "water")
+
+    def test_missing_query_token_blocks_even_valid_output(self):
+        """If the input query has no token in context, the translation is blocked
+        regardless of whether the output appears in context."""
+        ctx = "mibi lidan aban weyu"  # has 'mibi' but not 'smartphone'
+        assert not self.t._output_grounded_in_context("Mibi", ctx, "smartphone")
+
+    def test_empty_query_text_falls_back_to_condition2_only(self):
+        """When query_text is empty (default), condition 1 is skipped — backward
+        compatible with the existing unit test call convention."""
+        ctx = "mibi lidan aban weyu"
+        # No query_text → condition 1 skipped → condition 2: 'mibi' in ctx → True
+        assert self.t._output_grounded_in_context("Mibi", ctx)
