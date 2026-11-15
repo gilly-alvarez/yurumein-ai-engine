@@ -1,46 +1,43 @@
 """
-Targeted tests for the Phase 4B Translator numbers-retrieval and validation fixes.
+Targeted tests for the Phase 4B/4C Translator numbers-retrieval and validation fixes.
 
-Fix 1 — Retrieval: _RE_NUMBERS_INTENT regex detects numbers queries and
+Fix 1 — Retrieval (Phase 4B): _RE_NUMBERS_INTENT detects numbers queries and
   triggers page_search(source_pattern="%DICCIONARIO GARIFUNA%", pages=(203,))
   to guarantee DICCIONARIO p.203 ("NUMERU LIDAN GARIFUNA") enters the retrieval
-  pool for all casing variants ("numbers in garifuna language" / "Numbers in
-  Garifuna Language" / "NUMBERS IN GARIFUNA LANGUAGE").
-  A content guard ("NUMERU LIDAN GARIFUNA" in chunk) confirms the result
-  is page 203 before it is accepted. page_search is a pure-SQL page-label
-  lookup — no embeddings required, deterministic.
+  pool for all casing variants. page_search is a pure-SQL page-label lookup — no
+  embeddings required, deterministic. Content guard confirms p.203.
 
-Fix 2 — Validation gate: _SKIP_VALIDATION_TOKENS excludes "garifuna" /
-  "garífuna" from _output_contains_garifuna_forms(). These language-name tokens
-  appear in both Spanish descriptions and Garífuna text and cannot discriminate.
-  After the fix:
-  - "NUMERU LIDAN GARIFUNA" passes via "lidan" (Garífuna preposition, in 20+
-    lexicon entries, e.g. id=2811 'Garifunóuti, Lidan garifuna').
-  - "NUMEROS EN IDIOMA GARIFUNA" still passes via "idioma" because ids 4293/4294
-    have Spanish text in the garifuna column, contaminating the word set.
-    This residual failure is a known limitation requiring lexicon data correction
-    (ids 4293, 4294, 4676) — documented separately, not corrected here.
+Fix 2 — Validation gate (Phase 4B): _SKIP_VALIDATION_TOKENS excludes
+  "garifuna"/"garífuna" from _output_contains_garifuna_forms(). These tokens
+  appear in both Spanish and Garífuna text and cannot discriminate.
 
-Regex scope (narrowed from initial draft):
-  - "count" removed: handled by lexicon.lookup() via Fix B ('count, (numbers)'
-    → Abahüda) before _retrieve_context() is reached; keeping it would inject the
-    numbers table into unrelated phrases like "count the birds".
-  - "lidan" removed: Garífuna preposition that appears in 20+ non-numbers entries
-    (e.g. "Lidan oura buiti"); "lidan" alone is not a numbers indicator.
+Fix 3 — Contamination filter (Phase 4C): _CONTAMINATED_LEXICON_IDS excludes
+  23 records with Spanish text in the garifuna column from _load_garifuna_words().
+  Source: Phase 4C audit. Key contaminating records:
+    - 4293/4294: Spanish-language annotations injecting "idioma", "español"
+    - 6326, 7511-7512, 8923, 9090, 9099, 9131, 9132: alphabet meta-commentary
+    - 4583, 4676, 5145, 5593, 5595, 7471: geographic/biographical Spanish text
+    - 4090, 5142: Spanish institutional headings
+    - 5269, 7927: other meta-linguistic Spanish
+    - 6857: Spanish description containing isolated Garífuna words
+  After this fix:
+    - "idioma" is no longer in _garifuna_words — from contaminated entries only
+    - "NUMEROS EN IDIOMA GARIFUNA" is now correctly REJECTED
 
-Root cause confirmed by DB:
-  - keyword_search("numbers in garifuna language"): extracts terms ["numbers",
-    "garifuna", "language"]; DICCIONARIO p.203 scores 1/3 (only "garifuna"
-    matches — chunk has "NUMEROS"/"IDIOMA" in Spanish). Never reaches top-5.
-  - similarity_search: casing-sensitive — lowercase queries score lower against
-    uppercase "NUMERU LIDAN GARIFUNA" chunk.
-  - nodes.py is NOT in the Translator path; _CONTEXTUAL_QUERY_EXPANSIONS
-    would have no effect here.
+Regex scope (narrowed in Phase 4B, unchanged):
+  - "count" excluded: handled upstream by lexicon Fix B
+  - "lidan" excluded: Garífuna preposition in 20+ non-numbers contexts
 
-Tests are split into:
-  A. Pure-logic (no DB, no API): regex correctness and skip-token set
-  B. DB-only (requires localhost:5432, no OpenAI key): retrieval and validation
-  C. Live (requires valid OpenAI key): end-to-end retrieval — pending key refresh
+Root cause (Phase 4B, confirmed by DB):
+  - keyword_search scores DICCIONARIO p.203 too low for English queries
+  - similarity_search is casing-sensitive; lowercase queries miss the chunk
+  - nodes.py is NOT in the Translator path (_CONTEXTUAL_QUERY_EXPANSIONS
+    has no effect here)
+
+Tests:
+  A. Pure-logic (no DB, no API): regex, skip-tokens, contamination-ID set
+  B. DB-only (requires localhost:5432): retrieval confirmation and validation
+  C. Live (requires valid OpenAI key): end-to-end — pending key rotation
 """
 import sys
 import os
@@ -110,6 +107,45 @@ class TestNumbersIntentRegex:
         assert not self._match("encounter")
 
 
+class TestContaminatedLexiconIds:
+    """_CONTAMINATED_LEXICON_IDS must contain the full set of 23 audited records.
+    These are the records whose garifuna columns contain Spanish text (alphabet
+    meta-commentary, geographic descriptions, language annotations) that would
+    otherwise inject Spanish tokens like 'idioma', 'consonantes', 'sustituida'
+    into the validation word set.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _load(self):
+        from app.services.translater.translater import _CONTAMINATED_LEXICON_IDS
+        self.ids = _CONTAMINATED_LEXICON_IDS
+
+    def test_set_size(self):
+        assert len(self.ids) == 23, (
+            f"Expected 23 contaminated IDs from Phase 4C audit, got {len(self.ids)}"
+        )
+
+    def test_contains_idioma_sources(self):
+        """Records confirmed to inject 'idioma' into the word set."""
+        for expected in (4293, 4294, 6326, 7511, 8923, 9099, 9132):
+            assert expected in self.ids, f"id={expected} (idioma source) missing from set"
+
+    def test_contains_alphabet_meta_sources(self):
+        """Records with alphabet meta-commentary in garifuna column."""
+        for expected in (4188, 5269, 7512, 8922, 9090, 9131):
+            assert expected in self.ids, f"id={expected} (alphabet meta) missing from set"
+
+    def test_contains_geographic_sources(self):
+        """Records with Spanish geographic descriptions in garifuna column."""
+        for expected in (4583, 4676, 5145, 5593, 5595, 7471):
+            assert expected in self.ids, f"id={expected} (geographic) missing from set"
+
+    def test_set_is_frozenset(self):
+        """Must be a frozenset so it cannot be mutated at runtime."""
+        from app.services.translater.translater import _CONTAMINATED_LEXICON_IDS as cids
+        assert isinstance(cids, frozenset)
+
+
 class TestSkipValidationTokens:
     """_SKIP_VALIDATION_TOKENS: garifuna/garífuna excluded from validation.
     'NUMERU LIDAN GARIFUNA' must still pass via 'lidan' (confirmed in real lexicon).
@@ -171,22 +207,26 @@ def vs():
 
 @pytest.fixture(scope="module")
 def garifuna_words():
-    """Real lexicon word set from yurumein_lexicon.garifuna column."""
+    """Real lexicon word set, built exactly as _load_garifuna_words() does.
+    Excludes _CONTAMINATED_LEXICON_IDS so the fixture tests the corrected set."""
     try:
         from sqlalchemy import create_engine, text as sa_text
         from app.core.config import settings
+        from app.services.translater.translater import _CONTAMINATED_LEXICON_IDS
         engine = create_engine(
             f"postgresql://{settings.DB_USER}:{settings.DB_PASS}"
             f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
         )
         with engine.connect() as conn:
             rows = conn.execute(sa_text(
-                "SELECT garifuna FROM yurumein_lexicon WHERE garifuna IS NOT NULL AND garifuna != ''"
-            )).mappings().all()
+                "SELECT garifuna FROM yurumein_lexicon "
+                "WHERE garifuna IS NOT NULL AND garifuna != '' "
+                "AND id != ALL(:excluded)"
+            ), {"excluded": list(_CONTAMINATED_LEXICON_IDS)}).mappings().all()
         words: set = set()
         for row in rows:
             for token in (row["garifuna"] or "").split():
-                w = token.strip(".,;:!?-").lower()
+                w = token.strip(".,;:!?-()").lower()
                 if len(w) > 2:
                     words.add(w)
         return words
@@ -272,15 +312,72 @@ class TestPageSearchSurfacesP203:
                 )
 
 
+class TestRetrievalContextInclusion:
+    """
+    Task 3: Confirm that the p.203 chunk enters the final LLM context string,
+    not merely returned by the database query. Tests _retrieve_context() directly.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _translater(self):
+        try:
+            from app.services.translater.translater import Translater
+            self.t = Translater()
+        except Exception as e:
+            pytest.skip(f"Translater unavailable: {e}")
+
+    def test_numbers_query_includes_p203_in_context(self):
+        """'numbers in garifuna language' must produce a context string containing
+        'NUMERU LIDAN GARIFUNA' (the p.203 content guard phrase)."""
+        ctx = self.t._retrieve_context("numbers in garifuna language")
+        assert "NUMERU LIDAN GARIFUNA" in ctx, (
+            "p.203 chunk must be present in _retrieve_context() output for numbers query"
+        )
+
+    def test_numbers_query_uppercase_includes_p203(self):
+        """Uppercase numbers query must also include p.203."""
+        ctx = self.t._retrieve_context("NUMBERS IN GARIFUNA LANGUAGE")
+        assert "NUMERU LIDAN GARIFUNA" in ctx
+
+    def test_numeru_query_includes_p203(self):
+        """'numeru lidan garifuna' triggers the numbers intent and must include p.203."""
+        ctx = self.t._retrieve_context("numeru lidan garifuna")
+        assert "NUMERU LIDAN GARIFUNA" in ctx
+
+    def test_non_numbers_query_does_not_inject_p203(self):
+        """An unrelated query must NOT include DICCIONARIO p.203 in context.
+        This confirms the page_search fallback fires only on numbers intent.
+        """
+        ctx = self.t._retrieve_context("how do you say hello")
+        assert "NUMERU LIDAN GARIFUNA" not in ctx, (
+            "p.203 must not be injected for non-numbers queries"
+        )
+
+    def test_color_query_does_not_inject_p203(self):
+        """Color query must not include p.203."""
+        ctx = self.t._retrieve_context("what is the color blue in garifuna")
+        assert "NUMERU LIDAN GARIFUNA" not in ctx
+
+    def test_lidan_alone_does_not_inject_p203(self):
+        """'lidan garifuna' must NOT inject p.203 — 'lidan' was explicitly excluded
+        from _RE_NUMBERS_INTENT to avoid broad triggers."""
+        ctx = self.t._retrieve_context("lidan garifuna")
+        assert "NUMERU LIDAN GARIFUNA" not in ctx, (
+            "'lidan garifuna' must not trigger numbers retrieval — lidan is a preposition"
+        )
+
+
 class TestValidationGateWithRealLexicon:
     """
-    Validate _output_contains_garifuna_forms() behavior against the ACTUAL
-    lexicon word set — not a simulated clean set.
+    Validate _output_contains_garifuna_forms() against the contamination-filtered
+    lexicon word set (Phase 4C fix applied).
 
-    Known limitation: ids 4293 and 4294 put "idioma" into _garifuna_words, so
-    "NUMEROS EN IDIOMA GARIFUNA" still passes validation via "idioma" even after
-    the skip-tokens fix. Fixing this requires correcting those DB records (owner
-    action required). Tests document both the passing behavior and the limitation.
+    The garifuna_words fixture mirrors _load_garifuna_words() exactly:
+    it excludes _CONTAMINATED_LEXICON_IDS. Tests verify that after Phase 4C:
+      - "NUMEROS EN IDIOMA GARIFUNA" is REJECTED (idioma no longer in word set)
+      - Legitimate Garífuna single-word and multi-word outputs are ACCEPTED
+      - Language-only phrases are REJECTED (via _SKIP_VALIDATION_TOKENS)
+      - Diacritics, masculine/feminine forms, and place names are handled correctly
     """
 
     @pytest.fixture(autouse=True)
@@ -290,7 +387,7 @@ class TestValidationGateWithRealLexicon:
         self.skip = _SKIP_VALIDATION_TOKENS
 
     def _validate(self, translation: str) -> bool:
-        """Reproduce _output_contains_garifuna_forms() logic."""
+        """Reproduce _output_contains_garifuna_forms() with Phase 4C strip chars."""
         words, skip = self.words, self.skip
         if not words:
             return False
@@ -299,18 +396,48 @@ class TestValidationGateWithRealLexicon:
             segments.update(seg.strip().lower() for seg in translation.split(sep))
         for segment in segments:
             for token in segment.split():
-                w = token.strip(".,;:!?-").lower()
+                w = token.strip(".,;:!?-()").lower()
                 if len(w) > 2 and w in words and w not in skip:
                     return True
         return False
 
-    # Correct Garífuna outputs — must pass
-    def test_numeru_lidan_garifuna_passes(self):
-        """The correct numbers section heading must pass validation.
-        Passes via 'lidan' — a Garífuna preposition in 20+ lexicon entries."""
-        assert self._validate("NUMERU LIDAN GARIFUNA"), (
-            "'NUMERU LIDAN GARIFUNA' must PASS validation via 'lidan' (Garífuna preposition)"
+    # Phase 4C: Spanish section headings must be REJECTED
+    def test_numeros_idioma_garifuna_rejected(self):
+        """Phase 4C fix: 'NUMEROS EN IDIOMA GARIFUNA' must be REJECTED.
+        'idioma' was the contamination token from ids 4293/4294. After excluding
+        those records from the word set, 'idioma' is no longer present.
+        """
+        assert "idioma" not in self.words, (
+            "'idioma' must not be in the filtered word set "
+            "(contaminated IDs 4293, 4294, 6326, 7511, 8923, 9099, 9132 excluded)"
         )
+        assert not self._validate("NUMEROS EN IDIOMA GARIFUNA"), (
+            "'NUMEROS EN IDIOMA GARIFUNA' (Spanish section heading) must be REJECTED"
+        )
+
+    def test_idioma_absent_from_word_set(self):
+        """'idioma' must not appear in the contamination-filtered word set."""
+        assert "idioma" not in self.words
+
+    def test_consonantes_absent_from_word_set(self):
+        """'consonantes' must not appear in the filtered word set."""
+        assert "consonantes" not in self.words
+
+    def test_sustituida_absent_from_word_set(self):
+        """'sustituida' must not appear in the filtered word set."""
+        assert "sustituida" not in self.words
+
+    # Correct Garífuna outputs — must PASS
+    def test_numeru_lidan_garifuna_passes(self):
+        """The numbers section heading in Garífuna must pass validation.
+        Passes via 'lidan' — a Garífuna preposition in 20+ clean lexicon entries."""
+        assert self._validate("NUMERU LIDAN GARIFUNA"), (
+            "'NUMERU LIDAN GARIFUNA' must PASS validation via 'lidan'"
+        )
+
+    def test_lidan_in_word_set(self):
+        """'lidan' must remain in the word set from clean entries."""
+        assert "lidan" in self.words, "'lidan' must be in filtered word set"
 
     def test_aban_passes(self):
         assert self._validate("Aban"), "'Aban' (1 in Garífuna) must pass"
@@ -329,47 +456,45 @@ class TestValidationGateWithRealLexicon:
             "Multi-word Garífuna phrase must pass"
         )
 
-    # Validation limitation: contaminated word set
-    def test_numeros_idioma_garifuna_limitation(self):
-        """
-        KNOWN LIMITATION: 'NUMEROS EN IDIOMA GARIFUNA' (Spanish output / leak)
-        still passes via 'idioma' — which is in _garifuna_words from ids 4293/4294
-        where the garifuna column contains Spanish text.
-        Skip tokens ('garifuna') are excluded but 'idioma' is not.
-        Root fix: correct ids 4293 and 4294 (owner action required).
-        This test documents the limitation rather than asserting a fix.
-        """
-        idioma_in_words = "idioma" in self.words
-        passes = self._validate("NUMEROS EN IDIOMA GARIFUNA")
-        # Document the finding — do not assert it must pass or fail
-        # since the fix requires DB correction outside this PR's scope.
-        assert idioma_in_words, (
-            "'idioma' expected in _garifuna_words from contaminated entries "
-            f"(ids 4293, 4294). This confirms the validation limitation."
-        )
-        # This assertion will fail once the data correction is applied:
-        # assert not passes, "After correcting ids 4293/4294, Spanish leak should fail"
+    def test_diacritics_preserved_urüwa(self):
+        """Garífuna words with ü must pass — diacritics are part of the form."""
+        assert self._validate("Ürüwa"), "Diacritic form 'Ürüwa' must pass"
 
-    def test_pure_spanish_sentence_without_contamination(self):
-        """A Spanish sentence with no contaminated token must fail validation."""
-        # "el perro es bonito" — none of these words should be in _garifuna_words
-        result = self._validate("el perro es bonito")
-        assert not result, (
-            "'el perro es bonito' (Spanish) must fail validation"
+    def test_diacritics_preserved_bürüraütü(self):
+        """Multi-token output with diacritics (thin, masculine) must pass."""
+        assert self._validate("Bürüraütü"), "'Bürüraütü' (thin, masculine) must pass"
+
+    def test_masculine_form_passes(self):
+        """Masculine Garífuna form must pass independently."""
+        assert self._validate("Aturiahatu"), "'Aturiahatu' (student, masculine) must pass"
+
+    def test_feminine_form_passes(self):
+        """Feminine Garífuna form must pass independently."""
+        assert self._validate("Aturiahati"), "'Aturiahati' (student, feminine) must pass"
+
+    def test_hamuga_passes(self):
+        """'Hamuga' appears in 8+ clean entries — must pass after contamination filter."""
+        assert self._validate("Hamuga"), (
+            "'Hamuga' must pass — it appears in clean entries (ids 452, 1710, 1711, ...)"
+        )
+
+    # Must REJECT
+    def test_pure_spanish_sentence_rejected(self):
+        """Spanish sentence with no Garífuna tokens must fail."""
+        assert not self._validate("el perro es bonito"), (
+            "'el perro es bonito' (Spanish) must be REJECTED"
+        )
+
+    def test_mixed_language_heading_rejected(self):
+        """Spanish with shared word must fail: 'idioma' gone, 'garifuna' skipped."""
+        assert not self._validate("idioma garifuna"), (
+            "'idioma garifuna' must be REJECTED — idioma excluded, garifuna skipped"
         )
 
     def test_garifuna_alone_rejected(self):
-        """'garifuna' as the entire output must fail — it's in _SKIP_VALIDATION_TOKENS."""
-        assert not self._validate("garifuna"), (
-            "'garifuna' alone must be REJECTED after skip-token fix"
-        )
+        """'garifuna' alone must fail — in _SKIP_VALIDATION_TOKENS."""
+        assert not self._validate("garifuna")
 
-    def test_garifuna_as_only_token_in_phrase_rejected(self):
-        """
-        'En Garifuna' — 'garifuna' skipped, 'en' too short — must fail.
-        (Without fix, it passed via 'garifuna'.)
-        """
-        assert not self._validate("En Garifuna"), (
-            "'En Garifuna' must be REJECTED — only 'garifuna' would match, "
-            "but it is in _SKIP_VALIDATION_TOKENS"
-        )
+    def test_en_garifuna_rejected(self):
+        """'En Garifuna' must fail — garifuna skipped, 'en' too short."""
+        assert not self._validate("En Garifuna")

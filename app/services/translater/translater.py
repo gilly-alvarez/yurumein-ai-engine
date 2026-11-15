@@ -34,6 +34,39 @@ _RE_NUMBERS_INTENT = re.compile(
 # discriminate a Garífuna translation from a Spanish one.
 _SKIP_VALIDATION_TOKENS: frozenset = frozenset({"garifuna", "garífuna"})
 
+# Lexicon records whose garifuna column contains Spanish descriptions, alphabet
+# meta-commentary, or geographic text rather than Garífuna vocabulary.
+# Source: Phase 4C audit. These 23 records must not contribute tokens to the
+# validation word set — removing them eliminates Spanish tokens like "idioma",
+# "consonantes", "sustituida" that otherwise cause false validation passes.
+# Owner action is required to correct or retire each record; this list must not
+# grow by guessing — only add an id after auditing the actual garifuna value.
+_CONTAMINATED_LEXICON_IDS: frozenset = frozenset({
+    4090,   # 'QUE NO SON PROPIOS DEL PUEBLO' (Spanish dance-list heading)
+    4188,   # 'garifuna y es sustituida por la k...' (alphabet meta C)
+    4293,   # '(en Idioma Español) Hamuga,...' (Spanish-language annotation)
+    4294,   # '(En idioma Español moderno)...' (Spanish-language annotation)
+    4583,   # 'Enriquez Bermudez de Labuga Livingston' (biographical Spanish)
+    4676,   # 'Ubicado al norte de Livingston...' (Spanish geographic description)
+    5142,   # 'DE ESTADO PUEBLO GARIFUNA 1982.' (institutional Spanish)
+    5145,   # 'LIVINGSTON CON EL ALCALDE...' (biographical Spanish)
+    5269,   # 'ya que no forma parte del alfabeto' (meta-linguistic Spanish)
+    5593,   # 'Livingston' (place-name only, not Garífuna vocabulary)
+    5595,   # 'DE LIVINGSTON (1831-1878)' (historical Spanish)
+    6326,   # 'que se antepone a Verbos en Idioma' (meta-linguistic Spanish)
+    6857,   # 'en una comunidad Ágüdahati, Gágüdahati' (Spanish description)
+    7471,   # 'se encuentra en Labuga Livingston,' (Spanish geographic)
+    7511,   # 'garifuna y es sustituida...idioma).' (alphabet meta Q)
+    7512,   # 'en las consonantes del mismo' (alphabet meta)
+    7927,   # 'correcta para escribir en español...' (meta-linguistic)
+    8922,   # 'garifuna y sustituida por la letra B...' (alphabet meta V)
+    8923,   # 'en las consonantes del mismo idioma).' (alphabet meta)
+    9090,   # 'garifuna y la decimosexta consonantes...' (alphabet meta W)
+    9099,   # 'idioma garifuna y la decima séptima...' (alphabet meta Y)
+    9131,   # 'garifuna y es sustituida por la letra...' (alphabet meta Z)
+    9132,   # 'letra en las consonantes del mismo idioma).' (alphabet meta)
+})
+
 _DECLINE_RESPONSE = {
     "en": (
         "A verified Garífuna translation is not available for this term. "
@@ -60,17 +93,19 @@ class Translater:
         self._cache_loaded_at: Optional[datetime] = None
 
     def _load_garifuna_words(self) -> Set[str]:
-        """Load all verified Garífuna word-forms from the lexicon for context grounding checks."""
+        """Load verified Garífuna word-forms, excluding contaminated records."""
         from sqlalchemy import text as sa_text
         try:
             with self.lexicon.engine.connect() as conn:
                 rows = conn.execute(sa_text(
-                    "SELECT garifuna FROM yurumein_lexicon WHERE garifuna IS NOT NULL AND garifuna != ''"
-                )).mappings().all()
+                    "SELECT garifuna FROM yurumein_lexicon "
+                    "WHERE garifuna IS NOT NULL AND garifuna != '' "
+                    "AND id != ALL(:excluded)"
+                ), {"excluded": list(_CONTAMINATED_LEXICON_IDS)}).mappings().all()
             words: Set[str] = set()
             for row in rows:
                 for token in (row["garifuna"] or "").split():
-                    w = token.strip(".,;:!?-").lower()
+                    w = token.strip(".,;:!?-()").lower()
                     if len(w) > 2:
                         words.add(w)
             return words
