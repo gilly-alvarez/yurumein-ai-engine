@@ -19,13 +19,27 @@ class YurumeinLexicon:
         )
 
     def lookup(self, term: str, language: str) -> list:
-        """EN/ES -> Garifuna lookup by normalized column."""
+        """EN/ES -> Garifuna lookup by normalized column.
+
+        For English queries, if exact match fails and the query has no
+        parenthetical annotation, retries with a prefix match to find entries
+        like 'handsome (masculine)' when the user typed 'handsome'.
+        """
         lang = language.lower()
         norm = normalize_term(term)
         column = "spanish_norm" if lang in {"spanish", "es"} else "english_norm"
-        sql = text(f"SELECT * FROM yurumein_lexicon WHERE {column} = :term")
+        sql_exact = text(f"SELECT * FROM yurumein_lexicon WHERE {column} = :term")
         with self.engine.connect() as conn:
-            return [dict(r) for r in conn.execute(sql, {"term": norm}).mappings().all()]
+            rows = [dict(r) for r in conn.execute(sql_exact, {"term": norm}).mappings().all()]
+            if rows or column != "english_norm" or "(" in norm:
+                return rows
+            # Annotation-stripped fallback: match english_norm values that begin
+            # with the query followed by a space and open-paren, e.g.:
+            #   "handsome" matches "handsome (masculine)", "handsome (feminine)"
+            sql_prefix = text(
+                "SELECT * FROM yurumein_lexicon WHERE english_norm LIKE :prefix"
+            )
+            return [dict(r) for r in conn.execute(sql_prefix, {"prefix": norm + " (%"}).mappings().all()]
 
     def reverse_lookup(self, term: str) -> list:
         """Exact normalized match, handling accented initials and
