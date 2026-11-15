@@ -22,16 +22,24 @@ class YurumeinLexicon:
         """EN/ES -> Garifuna lookup by normalized column.
 
         For English queries, if exact match fails and the query contains no
-        parenthetical annotation, retries with LIKE to find entries stored as
-        'handsome (masculine)' when the user typed 'handsome'.  LIKE
-        metacharacters in the input are escaped so a query such as '50%' or
-        'some_thing' cannot act as a SQL wildcard.
+        parenthetical annotation, retries with LIKE in two passes:
 
-        Scope of the fallback:
-          - Covers ~2,002 entries stored as '<base> (<annotation>)'.
-          - Does NOT cover ~195 entries stored as '<base>, (<annotation>)'
-            (comma before the parenthetical) — these remain a known gap.
-          - When an exact entry for the base form exists, the fallback is not
+        Fix A — space-paren: matches '<base> (<annotation>)' e.g.
+          "handsome" → "handsome (masculine)", "handsome (feminine)"
+          Covers ~2,028 annotated entries stored with a space before '('.
+
+        Fix B — comma-paren: if Fix A also misses, matches '<base>, (<annotation>)'
+          e.g. "count" → "Count, (numbers)", "thin" → "Thin, (you)"
+          Covers ~93 entries stored with a comma before the parenthetical.
+
+        LIKE metacharacters (%, _, !) in the input are escaped so a query
+        such as '50%' or 'some_thing' cannot act as a SQL wildcard.
+
+        Scope:
+          - Fix A fires when the base form has no exact entry and no annotated
+            twin with the same exact normalized form.
+          - Fix B fires only when Fix A also returns nothing.
+          - When an exact entry for the base form exists, neither fallback is
             invoked; the exact match is returned and annotated variants are
             not appended.
         """
@@ -43,18 +51,17 @@ class YurumeinLexicon:
             rows = [dict(r) for r in conn.execute(sql_exact, {"term": norm}).mappings().all()]
             if rows or column != "english_norm" or "(" in norm:
                 return rows
-            # Annotation-stripped fallback: match english_norm values that begin
-            # with the query followed by ' (' e.g.:
-            #   "handsome" → "handsome (masculine)", "handsome (feminine)"
-            #   "belizean" → "belizean (man)", "belizean (woman)", …
-            # Uses '!' as the LIKE escape character so that %, _, and ! in the
-            # user input are treated as literals, not SQL wildcards.
             escaped = norm.replace("!", "!!").replace("%", "!%").replace("_", "!_")
-            sql_prefix = text(
+            sql_like = text(
                 "SELECT * FROM yurumein_lexicon"
                 " WHERE english_norm LIKE :prefix ESCAPE '!'"
             )
-            return [dict(r) for r in conn.execute(sql_prefix, {"prefix": escaped + " (%"}).mappings().all()]
+            # Fix A: space-paren — '<base> (<annotation>)'
+            rows = [dict(r) for r in conn.execute(sql_like, {"prefix": escaped + " (%"}).mappings().all()]
+            if rows:
+                return rows
+            # Fix B: comma-paren — '<base>, (<annotation>)'
+            return [dict(r) for r in conn.execute(sql_like, {"prefix": escaped + ", (%"}).mappings().all()]
 
     def reverse_lookup(self, term: str) -> list:
         """Exact normalized match, handling accented initials and
