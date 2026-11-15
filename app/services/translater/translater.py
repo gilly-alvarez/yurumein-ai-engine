@@ -97,12 +97,22 @@ class Translater:
         ctx_lower = context.lower()
         return any(word in ctx_lower for word in self._garifuna_words if len(word) > 2)
 
+    # "garifuna" and its accented form appear in both Garífuna and Spanish/English
+    # contexts (e.g. "NÚMEROS EN IDIOMA GARIFUNA") and cannot reliably anchor
+    # output validation.  Entries whose Garífuna translation IS the word
+    # "Garifuna" are handled by the lexicon path before the LLM is called.
+    _SKIP_VALIDATION_TOKENS: frozenset = frozenset({"garifuna", "garífuna"})
+
     def _output_contains_garifuna_forms(self, translation: str) -> bool:
         """
         Returns True only when at least one token of the translation is found in the
         lexicon's garifuna column word set. Anchors validation to labeled Garífuna data,
         not free-text context position — a Spanish word appearing as a gloss in a
         bilingual document cannot pass this check.
+
+        Common proper nouns shared across languages (see _SKIP_VALIDATION_TOKENS) are
+        excluded so that a Spanish phrase like "NÚMEROS EN IDIOMA GARIFUNA" cannot pass
+        solely because the word "garifuna" appears in both languages.
         """
         words = self._garifuna_words
         if not words:
@@ -114,7 +124,7 @@ class Translater:
         for segment in segments:
             for token in segment.split():
                 w = token.strip(".,;:!?-").lower()
-                if len(w) > 2 and w in words:
+                if len(w) > 2 and w in words and w not in self._SKIP_VALIDATION_TOKENS:
                     return True
         return False
 
