@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from typing import Dict, Optional, Set
 
@@ -12,6 +13,19 @@ from app.services.lexicon.lexicon import YurumeinLexicon
 
 if not os.environ.get("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+
+# Matches queries about numbers/counting in EN or ES regardless of casing.
+# When detected, _retrieve_context() guarantees DICCIONARIO p.203 enters the pool.
+_RE_NUMBERS_INTENT = re.compile(
+    r'\b(?:number[s]?|n[uú]mero[s]?|contar|count|lidan)\b',
+    re.IGNORECASE,
+)
+
+# Language-name tokens excluded from output validation.
+# "garifuna"/"garífuna" appear in Spanish descriptions of the language (e.g.
+# "NUMEROS EN IDIOMA GARIFUNA") and in Garífuna text alike — they cannot
+# discriminate a Garífuna translation from a Spanish one.
+_SKIP_VALIDATION_TOKENS: frozenset = frozenset({"garifuna", "garífuna"})
 
 _DECLINE_RESPONSE = {
     "en": (
@@ -88,6 +102,22 @@ class Translater:
                     seen.add(chunk)
                     chunks.append(chunk)
 
+            # Guarantee DICCIONARIO p.203 ("NUMERU LIDAN GARIFUNA") is in the
+            # pool for numbers queries. Keyword search never surfaces it because
+            # the chunk has "NUMEROS" (Spanish) rather than "numbers" (English),
+            # and similarity ranking is casing-sensitive — lowercase queries
+            # score lower against the uppercase chunk.
+            if _RE_NUMBERS_INTENT.search(text):
+                for d in self.vector_store.source_targeted_search(
+                    query="NUMERU LIDAN GARIFUNA",
+                    source_pattern="%DICCIONARIO GARIFUNA%",
+                    k=1,
+                ):
+                    chunk = (d.get("page_content") or "").strip()
+                    if chunk and chunk not in seen:
+                        seen.add(chunk)
+                        chunks.append(chunk)
+
             return "\n---\n".join(chunks)
         except Exception:
             return ""
@@ -114,7 +144,7 @@ class Translater:
         for segment in segments:
             for token in segment.split():
                 w = token.strip(".,;:!?-").lower()
-                if len(w) > 2 and w in words:
+                if len(w) > 2 and w in words and w not in _SKIP_VALIDATION_TOKENS:
                     return True
         return False
 
