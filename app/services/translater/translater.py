@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from typing import Dict, Optional, Set
 
@@ -8,10 +9,72 @@ from openai import OpenAI
 from .translater_schema import llm_response
 from app.core.config import settings
 from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import VectorStoreManager
-from app.services.lexicon.lexicon import YurumeinLexicon
+from app.services.lexicon.lexicon import YurumeinLexicon, normalize_term
 
 if not os.environ.get("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+
+# Matches queries specifically about numbers/counting vocabulary in EN or ES.
+# Triggers supplemental retrieval of DICCIONARIO p.203 ("NUMERU LIDAN GARIFUNA").
+#
+# Excluded deliberately:
+#   "count"  — handled by lexicon.lookup() via Fix B ('count, (numbers)' → Abahüda)
+#              before _retrieve_context() is ever reached; keeping it here would
+#              inject the numbers table into unrelated phrases like "count the birds".
+#   "lidan"  — a Garífuna preposition that appears in many non-numbers contexts
+#              (e.g. "Lidan oura buiti", "Lidan garifuna"); too broad a trigger.
+_RE_NUMBERS_INTENT = re.compile(
+    r'\b(?:number[s]?|n[uú]mero[s]?|numeru|contar)\b',
+    re.IGNORECASE,
+)
+
+# Language-name tokens excluded from output validation.
+# "garifuna"/"garífuna" appear in Spanish descriptions of the language (e.g.
+# "NUMEROS EN IDIOMA GARIFUNA") and in Garífuna text alike — they cannot
+# discriminate a Garífuna translation from a Spanish one.
+_SKIP_VALIDATION_TOKENS: frozenset = frozenset({"garifuna", "garífuna"})
+
+# Supported target languages. Any target_language that does not normalize to one
+# of these is rejected at the service boundary before any pipeline logic runs.
+# Keeps unsupported targets from reaching OpenAI and returning unchecked output.
+_SUPPORTED_LANGUAGE_TARGETS: frozenset = frozenset({
+    "gar", "garifuna",   # Garífuna — all case/accent variants normalize here
+    "en", "english",
+    "es", "spanish",
+})
+
+# Lexicon records whose garifuna column contains Spanish descriptions, alphabet
+# meta-commentary, or geographic text rather than Garífuna vocabulary.
+# Source: Phase 4C audit. These 23 records must not contribute tokens to the
+# validation word set — removing them eliminates Spanish tokens like "idioma",
+# "consonantes", "sustituida" that otherwise cause false validation passes.
+# Owner action is required to correct or retire each record; this list must not
+# grow by guessing — only add an id after auditing the actual garifuna value.
+_CONTAMINATED_LEXICON_IDS: frozenset = frozenset({
+    4090,   # 'QUE NO SON PROPIOS DEL PUEBLO' (Spanish dance-list heading)
+    4188,   # 'garifuna y es sustituida por la k...' (alphabet meta C)
+    4293,   # '(en Idioma Español) Hamuga,...' (Spanish-language annotation)
+    4294,   # '(En idioma Español moderno)...' (Spanish-language annotation)
+    4583,   # 'Enriquez Bermudez de Labuga Livingston' (biographical Spanish)
+    4676,   # 'Ubicado al norte de Livingston...' (Spanish geographic description)
+    5142,   # 'DE ESTADO PUEBLO GARIFUNA 1982.' (institutional Spanish)
+    5145,   # 'LIVINGSTON CON EL ALCALDE...' (biographical Spanish)
+    5269,   # 'ya que no forma parte del alfabeto' (meta-linguistic Spanish)
+    5593,   # 'Livingston' (place-name only, not Garífuna vocabulary)
+    5595,   # 'DE LIVINGSTON (1831-1878)' (historical Spanish)
+    6326,   # 'que se antepone a Verbos en Idioma' (meta-linguistic Spanish)
+    6857,   # 'en una comunidad Ágüdahati, Gágüdahati' (Spanish description)
+    7471,   # 'se encuentra en Labuga Livingston,' (Spanish geographic)
+    7511,   # 'garifuna y es sustituida...idioma).' (alphabet meta Q)
+    7512,   # 'en las consonantes del mismo' (alphabet meta)
+    7927,   # 'correcta para escribir en español...' (meta-linguistic)
+    8922,   # 'garifuna y sustituida por la letra B...' (alphabet meta V)
+    8923,   # 'en las consonantes del mismo idioma).' (alphabet meta)
+    9090,   # 'garifuna y la decimosexta consonantes...' (alphabet meta W)
+    9099,   # 'idioma garifuna y la decima séptima...' (alphabet meta Y)
+    9131,   # 'garifuna y es sustituida por la letra...' (alphabet meta Z)
+    9132,   # 'letra en las consonantes del mismo idioma).' (alphabet meta)
+})
 
 _DECLINE_RESPONSE = {
     "en": (
@@ -39,17 +102,19 @@ class Translater:
         self._cache_loaded_at: Optional[datetime] = None
 
     def _load_garifuna_words(self) -> Set[str]:
-        """Load all verified Garífuna word-forms from the lexicon for context grounding checks."""
+        """Load verified Garífuna word-forms, excluding contaminated records."""
         from sqlalchemy import text as sa_text
         try:
             with self.lexicon.engine.connect() as conn:
                 rows = conn.execute(sa_text(
-                    "SELECT garifuna FROM yurumein_lexicon WHERE garifuna IS NOT NULL AND garifuna != ''"
-                )).mappings().all()
+                    "SELECT garifuna FROM yurumein_lexicon "
+                    "WHERE garifuna IS NOT NULL AND garifuna != '' "
+                    "AND id != ALL(:excluded)"
+                ), {"excluded": list(_CONTAMINATED_LEXICON_IDS)}).mappings().all()
             words: Set[str] = set()
             for row in rows:
                 for token in (row["garifuna"] or "").split():
-                    w = token.strip(".,;:!?-").lower()
+                    w = token.strip(".,;:!?-()").lower()
                     if len(w) > 2:
                         words.add(w)
             return words
@@ -88,6 +153,24 @@ class Translater:
                     seen.add(chunk)
                     chunks.append(chunk)
 
+            # Guarantee DICCIONARIO p.203 ("NUMERU LIDAN GARIFUNA") enters the pool
+            # for numbers queries. Keyword search never surfaces it (chunk uses
+            # Spanish "NUMEROS"/"IDIOMA", not English "numbers"/"language").
+            # Similarity search is casing-sensitive — lowercase queries score lower
+            # against the uppercase chunk and may miss it entirely.
+            # page_search is a pure-SQL page-label lookup (no embeddings needed)
+            # and is deterministic. The content guard confirms the chunk is p.203.
+            if _RE_NUMBERS_INTENT.search(text):
+                for d in self.vector_store.page_search(
+                    source_pattern="%DICCIONARIO GARIFUNA%",
+                    pages=(203,),
+                ):
+                    chunk = (d.get("page_content") or "").strip()
+                    if chunk and chunk not in seen and "NUMERU LIDAN GARIFUNA" in chunk:
+                        seen.add(chunk)
+                        chunks.append(chunk)
+                        break  # one copy of p.203 is sufficient
+
             return "\n---\n".join(chunks)
         except Exception:
             return ""
@@ -114,8 +197,44 @@ class Translater:
         for segment in segments:
             for token in segment.split():
                 w = token.strip(".,;:!?-").lower()
-                if len(w) > 2 and w in words:
+                if len(w) > 2 and w in words and w not in _SKIP_VALIDATION_TOKENS:
                     return True
+        return False
+
+    def _output_grounded_in_context(self, translation: str, context: str, query_text: str = "") -> bool:
+        """Returns True when the retrieved context supports the LLM translation.
+
+        Condition 1 — input relevance (when query_text given, non-numbers queries):
+        language-name tokens ("garifuna", "garífuna") are excluded from the check
+        because they appear in ALL Garífuna-language contexts and cannot demonstrate
+        that the context is specifically about the requested concept. At least one
+        content token (non-language-name, non-short) must appear in context. If the
+        query contains NO content tokens (e.g. "garifuna" alone), condition 1 is
+        waived. Numbers queries are exempt entirely — page_search deterministically
+        retrieves p.203 for them, so condition 1 would yield false negatives.
+
+        Condition 2 — output presence: at least one meaningful translation token
+        must appear in the context."""
+        if not context:
+            return False
+        ctx_lower = context.lower()
+        if query_text:
+            # Numbers queries retrieve p.203 deterministically via page_search;
+            # "numbers" does not appear in that page's text so condition 1 would
+            # always fail for them. Skip condition 1 for numbers queries only.
+            if not _RE_NUMBERS_INTENT.search(query_text):
+                content_tokens = [
+                    normalize_term(tok)
+                    for tok in query_text.split()
+                    if len(normalize_term(tok)) > 2
+                    and normalize_term(tok) not in _SKIP_VALIDATION_TOKENS
+                ]
+                if content_tokens and not any(qt in ctx_lower for qt in content_tokens):
+                    return False  # context is not about the requested concept
+        for token in (translation or "").split():
+            w = token.strip(".,;:!?-()").lower()
+            if len(w) > 2 and w not in _SKIP_VALIDATION_TOKENS and w in ctx_lower:
+                return True
         return False
 
     def get_system_prompt(self, context: str) -> str:
@@ -154,9 +273,15 @@ Provide only the translated output in {target_language}."""
             ui_lang = (translation_info.get("ui_language") or "en").strip().lower()
             decline_msg = _DECLINE_RESPONSE.get(ui_lang, _DECLINE_RESPONSE["en"])
 
+            # Fail-closed: reject unsupported target languages before any pipeline
+            # logic runs. Prevents unknown targets from reaching OpenAI and returning
+            # unchecked output with no Garífuna-specific validation applied.
+            if normalize_term(target_language) not in _SUPPORTED_LANGUAGE_TARGETS:
+                return llm_response(translation=decline_msg)
+
             _gar = frozenset({"garifuna", "gar"})
-            is_garifuna_target = target_language.lower() in _gar
-            is_garifuna_source = base_language.lower() in _gar
+            is_garifuna_target = normalize_term(target_language) in _gar
+            is_garifuna_source = normalize_term(base_language) in _gar
 
             # Lexicon-first exact lookup for Garífuna targets (EN/ES → Garífuna).
             if is_garifuna_target:
@@ -224,6 +349,12 @@ Provide only the translated output in {target_language}."""
             # found in the lexicon's garifuna column. A Spanish word appearing as a gloss
             # in the retrieved bilingual context cannot pass this check.
             if is_garifuna_target and not self._output_contains_garifuna_forms(translation_text):
+                return llm_response(translation=decline_msg)
+
+            # Grounding check: translation must be derivable from context that is
+            # actually about the requested term. query_text (the input) is passed so
+            # condition 1 can verify the context is relevant to the query.
+            if is_garifuna_target and not self._output_grounded_in_context(translation_text, context, text):
                 return llm_response(translation=decline_msg)
 
             return validated
