@@ -21,9 +21,19 @@ class YurumeinLexicon:
     def lookup(self, term: str, language: str) -> list:
         """EN/ES -> Garifuna lookup by normalized column.
 
-        For English queries, if exact match fails and the query has no
-        parenthetical annotation, retries with a prefix match to find entries
-        like 'handsome (masculine)' when the user typed 'handsome'.
+        For English queries, if exact match fails and the query contains no
+        parenthetical annotation, retries with LIKE to find entries stored as
+        'handsome (masculine)' when the user typed 'handsome'.  LIKE
+        metacharacters in the input are escaped so a query such as '50%' or
+        'some_thing' cannot act as a SQL wildcard.
+
+        Scope of the fallback:
+          - Covers ~2,002 entries stored as '<base> (<annotation>)'.
+          - Does NOT cover ~195 entries stored as '<base>, (<annotation>)'
+            (comma before the parenthetical) — these remain a known gap.
+          - When an exact entry for the base form exists, the fallback is not
+            invoked; the exact match is returned and annotated variants are
+            not appended.
         """
         lang = language.lower()
         norm = normalize_term(term)
@@ -34,12 +44,17 @@ class YurumeinLexicon:
             if rows or column != "english_norm" or "(" in norm:
                 return rows
             # Annotation-stripped fallback: match english_norm values that begin
-            # with the query followed by a space and open-paren, e.g.:
-            #   "handsome" matches "handsome (masculine)", "handsome (feminine)"
+            # with the query followed by ' (' e.g.:
+            #   "handsome" → "handsome (masculine)", "handsome (feminine)"
+            #   "belizean" → "belizean (man)", "belizean (woman)", …
+            # Uses '!' as the LIKE escape character so that %, _, and ! in the
+            # user input are treated as literals, not SQL wildcards.
+            escaped = norm.replace("!", "!!").replace("%", "!%").replace("_", "!_")
             sql_prefix = text(
-                "SELECT * FROM yurumein_lexicon WHERE english_norm LIKE :prefix"
+                "SELECT * FROM yurumein_lexicon"
+                " WHERE english_norm LIKE :prefix ESCAPE '!'"
             )
-            return [dict(r) for r in conn.execute(sql_prefix, {"prefix": norm + " (%"}).mappings().all()]
+            return [dict(r) for r in conn.execute(sql_prefix, {"prefix": escaped + " (%"}).mappings().all()]
 
     def reverse_lookup(self, term: str) -> list:
         """Exact normalized match, handling accented initials and
