@@ -14,10 +14,17 @@ from app.services.lexicon.lexicon import YurumeinLexicon
 if not os.environ.get("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
 
-# Matches queries about numbers/counting in EN or ES regardless of casing.
-# When detected, _retrieve_context() guarantees DICCIONARIO p.203 enters the pool.
+# Matches queries specifically about numbers/counting vocabulary in EN or ES.
+# Triggers supplemental retrieval of DICCIONARIO p.203 ("NUMERU LIDAN GARIFUNA").
+#
+# Excluded deliberately:
+#   "count"  — handled by lexicon.lookup() via Fix B ('count, (numbers)' → Abahüda)
+#              before _retrieve_context() is ever reached; keeping it here would
+#              inject the numbers table into unrelated phrases like "count the birds".
+#   "lidan"  — a Garífuna preposition that appears in many non-numbers contexts
+#              (e.g. "Lidan oura buiti", "Lidan garifuna"); too broad a trigger.
 _RE_NUMBERS_INTENT = re.compile(
-    r'\b(?:number[s]?|n[uú]mero[s]?|contar|count|lidan)\b',
+    r'\b(?:number[s]?|n[uú]mero[s]?|numeru|contar)\b',
     re.IGNORECASE,
 )
 
@@ -102,21 +109,23 @@ class Translater:
                     seen.add(chunk)
                     chunks.append(chunk)
 
-            # Guarantee DICCIONARIO p.203 ("NUMERU LIDAN GARIFUNA") is in the
-            # pool for numbers queries. Keyword search never surfaces it because
-            # the chunk has "NUMEROS" (Spanish) rather than "numbers" (English),
-            # and similarity ranking is casing-sensitive — lowercase queries
-            # score lower against the uppercase chunk.
+            # Guarantee DICCIONARIO p.203 ("NUMERU LIDAN GARIFUNA") enters the pool
+            # for numbers queries. Keyword search never surfaces it (chunk uses
+            # Spanish "NUMEROS"/"IDIOMA", not English "numbers"/"language").
+            # Similarity search is casing-sensitive — lowercase queries score lower
+            # against the uppercase chunk and may miss it entirely.
+            # page_search is a pure-SQL page-label lookup (no embeddings needed)
+            # and is deterministic. The content guard confirms the chunk is p.203.
             if _RE_NUMBERS_INTENT.search(text):
-                for d in self.vector_store.source_targeted_search(
-                    query="NUMERU LIDAN GARIFUNA",
+                for d in self.vector_store.page_search(
                     source_pattern="%DICCIONARIO GARIFUNA%",
-                    k=1,
+                    pages=(203,),
                 ):
                     chunk = (d.get("page_content") or "").strip()
-                    if chunk and chunk not in seen:
+                    if chunk and chunk not in seen and "NUMERU LIDAN GARIFUNA" in chunk:
                         seen.add(chunk)
                         chunks.append(chunk)
+                        break  # one copy of p.203 is sufficient
 
             return "\n---\n".join(chunks)
         except Exception:
