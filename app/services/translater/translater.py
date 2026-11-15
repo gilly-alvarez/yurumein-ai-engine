@@ -9,7 +9,7 @@ from openai import OpenAI
 from .translater_schema import llm_response
 from app.core.config import settings
 from app.services.utils.RAG_pipeline.vectore_db.pgvector_db import VectorStoreManager
-from app.services.lexicon.lexicon import YurumeinLexicon
+from app.services.lexicon.lexicon import YurumeinLexicon, normalize_term
 
 if not os.environ.get("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
@@ -192,6 +192,21 @@ class Translater:
                     return True
         return False
 
+    def _output_grounded_in_context(self, translation: str, context: str) -> bool:
+        """Returns True if at least one meaningful token of the translation appears
+        in the retrieved RAG context. Guards against the word-set check accepting a
+        valid Garífuna word returned for the wrong meaning when the RAG context is
+        unrelated to the requested term (e.g. 'smartphone' → 'Mibi' via number-exercise
+        pages — 'mibi' is a real Garífuna word but not in the number-exercise context)."""
+        if not context:
+            return False
+        ctx_lower = context.lower()
+        for token in (translation or "").split():
+            w = token.strip(".,;:!?-()").lower()
+            if len(w) > 2 and w not in _SKIP_VALIDATION_TOKENS and w in ctx_lower:
+                return True
+        return False
+
     def get_system_prompt(self, context: str) -> str:
         return f"""You are **Yurumein AI**, a Garífuna language translator.
 
@@ -229,8 +244,8 @@ Provide only the translated output in {target_language}."""
             decline_msg = _DECLINE_RESPONSE.get(ui_lang, _DECLINE_RESPONSE["en"])
 
             _gar = frozenset({"garifuna", "gar"})
-            is_garifuna_target = target_language.lower() in _gar
-            is_garifuna_source = base_language.lower() in _gar
+            is_garifuna_target = normalize_term(target_language) in _gar
+            is_garifuna_source = normalize_term(base_language) in _gar
 
             # Lexicon-first exact lookup for Garífuna targets (EN/ES → Garífuna).
             if is_garifuna_target:
@@ -298,6 +313,12 @@ Provide only the translated output in {target_language}."""
             # found in the lexicon's garifuna column. A Spanish word appearing as a gloss
             # in the retrieved bilingual context cannot pass this check.
             if is_garifuna_target and not self._output_contains_garifuna_forms(translation_text):
+                return llm_response(translation=decline_msg)
+
+            # Grounding check: at least one translation token must appear in the retrieved
+            # context. Prevents the word-set check from accepting a real Garífuna word that
+            # the model inferred from training data when the RAG context is irrelevant.
+            if is_garifuna_target and not self._output_grounded_in_context(translation_text, context):
                 return llm_response(translation=decline_msg)
 
             return validated

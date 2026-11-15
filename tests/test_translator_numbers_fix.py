@@ -498,3 +498,289 @@ class TestValidationGateWithRealLexicon:
     def test_en_garifuna_rejected(self):
         """'En Garifuna' must fail — garifuna skipped, 'en' too short."""
         assert not self._validate("En Garifuna")
+
+
+class TestValidationGateAdversarial:
+    """
+    Documents KNOWN LIMITATIONS of the validation word-set approach.
+
+    These tests record the validator's actual behaviour against adversarial
+    inputs drawn from the production lexicon.  Assertions prefixed KNOWN_LIMIT
+    record cases the current word-set tokenisation cannot block:
+
+      1. Garífuna loanwords from Spanish (agua, baile) appear in both languages.
+      2. Spanish parenthetical glosses inside the garifuna column contribute
+         tokens that are indistinguishable from Garífuna vocabulary.
+      3. Spanish descriptions inside mixed-content garifuna rows contribute
+         common Spanish prepositions (del) as word-set tokens.
+
+    None of these are regressions from Phase 4C.  Fixing them requires either
+    parenthetical-content stripping or a comprehensive mixed-content audit —
+    neither is in scope for this PR.
+
+    The critical Phase 4C failure (Spanish institutional headings accepted via
+    'idioma') is fully fixed and covered in TestValidationGateWithRealLexicon.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _load(self, garifuna_words):
+        from app.services.translater.translater import _SKIP_VALIDATION_TOKENS
+        self.words = garifuna_words
+        self.skip = _SKIP_VALIDATION_TOKENS
+
+    def _validate(self, translation: str) -> bool:
+        words, skip = self.words, self.skip
+        if not words:
+            return False
+        segments = {translation.strip().lower()}
+        for sep in (',', ';'):
+            segments.update(seg.strip().lower() for seg in translation.split(sep))
+        for segment in segments:
+            for token in segment.split():
+                w = token.strip(".,;:!?-()").lower()
+                if len(w) > 2 and w in words and w not in skip:
+                    return True
+        return False
+
+    # --- Confirmed Phase 4C improvements ---
+
+    def test_phase4c_key_fix_numeros_idioma_rejected(self):
+        """REGRESSION GUARD: the Phase 4C target failure must remain rejected."""
+        assert not self._validate("NUMEROS EN IDIOMA GARIFUNA")
+
+    def test_phase4c_idioma_absent(self):
+        """REGRESSION GUARD: 'idioma' must not be in the filtered word set."""
+        assert "idioma" not in self.words
+
+    def test_spanish_number_words_rejected(self):
+        """Spanish number words (uno–cinco) have no overlap with Garífuna lexicon."""
+        assert not self._validate("Uno, dos, tres, cuatro, cinco")
+
+    def test_spanish_place_phrase_rejected(self):
+        """Spanish phrase with no lexicon overlap must be rejected."""
+        assert not self._validate("Pueblo nuevo barrio garifuna")
+
+    def test_spanish_fundacion_rejected(self):
+        assert not self._validate("Fundación de Livingston")
+
+    def test_spanish_nature_phrase_rejected(self):
+        assert not self._validate("La luna y el sol")
+
+    # --- Known limitations: loanwords / parenthetical glosses ---
+
+    def test_known_limit_agua_in_word_set(self):
+        """KNOWN LIMITATION: 'agua' is in the filtered word set.
+        It enters via lexicon entries where it functions as a Garífuna verb
+        form meaning 'put/throw' (ids 1094, 1585, 4165).  Separately, id=4504
+        contributes it via Spanish context.  Because 'agua' has a documented
+        Garífuna use, it cannot be excluded without a source-grounded audit.
+        Consequence: Spanish phrases containing 'agua' can pass the gate.
+        """
+        assert "agua" in self.words  # documents the limitation
+
+    def test_known_limit_del_in_word_set(self):
+        """KNOWN LIMITATION: 'del' is in the filtered word set.
+        It enters via 8 records whose garifuna column contains Spanish
+        descriptions (e.g. 'del cazabe', 'del pozo', 'en la profundidad del').
+        Root cause: mixed-content entries where Spanish context precedes a
+        Garífuna word in the same column value.  Fix requires parenthetical
+        stripping or a broader mixed-content audit — not in scope for this PR.
+        Consequence: Spanish phrases containing 'del' can pass the gate.
+        Source IDs: 5107, 5144, 6242, 6244, 6245, 7381, 7678, 8946.
+        """
+        assert "del" in self.words  # documents the limitation
+
+    def test_known_limit_hombre_in_word_set(self):
+        """KNOWN LIMITATION: 'hombre' is in the filtered word set.
+        It enters via parenthetical Spanish glosses in ids 304, 3815, 8849
+        (e.g. 'Yámani (wügürí - hombre)').  The strip of '()' extracts
+        'hombre' as a bare token.
+        """
+        assert "hombre" in self.words  # documents the limitation
+
+    def test_known_limit_baile_in_word_set(self):
+        """KNOWN LIMITATION: 'baile' is in the filtered word set.
+        It enters from id=4085 'Abinani min pol (Baile que se realiza…)'
+        — a Garífuna phrase followed by a parenthetical Spanish explanation.
+        """
+        assert "baile" in self.words  # documents the limitation
+
+
+# ---------------------------------------------------------------------------
+# D. Language-code normalization regression tests (Task 1 fix)
+# ---------------------------------------------------------------------------
+
+class TestLanguageCodeNormalization:
+    """
+    normalize_term() applied to target_language in get_response() must
+    canonicalize all documented Garífuna language-code variants to a form
+    present in the _gar frozenset. Without this fix, 'Garífuna'/'garífuna'
+    (accented label sent by the frontend) yielded is_garifuna_target=False,
+    silently bypassing the lexicon-first path, context-evidence check, and
+    output validator — the validation bypass confirmed in the Phase 4C audit.
+    """
+
+    def test_garifuna_accented_lower_normalizes(self):
+        """'garífuna' (accented, lowercase) must normalize to 'garifuna'."""
+        from app.services.lexicon.lexicon import normalize_term
+        assert normalize_term("garífuna") == "garifuna"
+
+    def test_garifuna_accented_title_normalizes(self):
+        """'Garífuna' (accented + title-case) must normalize to 'garifuna'."""
+        from app.services.lexicon.lexicon import normalize_term
+        assert normalize_term("Garífuna") == "garifuna"
+
+    def test_garifuna_title_normalizes(self):
+        from app.services.lexicon.lexicon import normalize_term
+        assert normalize_term("Garifuna") == "garifuna"
+
+    def test_garifuna_lower_unchanged(self):
+        from app.services.lexicon.lexicon import normalize_term
+        assert normalize_term("garifuna") == "garifuna"
+
+    def test_gar_code_unchanged(self):
+        from app.services.lexicon.lexicon import normalize_term
+        assert normalize_term("gar") == "gar"
+
+    def test_all_five_variants_in_gar_frozenset(self):
+        """All five documented Garífuna code variants must resolve to a _gar member."""
+        from app.services.lexicon.lexicon import normalize_term
+        _gar = frozenset({"garifuna", "gar"})
+        for v in ("gar", "garifuna", "Garifuna", "garífuna", "Garífuna"):
+            assert normalize_term(v) in _gar, (
+                f"Language variant '{v}' must normalize to a _gar member; "
+                f"got '{normalize_term(v)}'"
+            )
+
+    def test_unsupported_codes_not_in_gar(self):
+        """Unknown language labels must not activate the Garífuna path."""
+        from app.services.lexicon.lexicon import normalize_term
+        _gar = frozenset({"garifuna", "gar"})
+        for code in ("Spanish", "english", "EN", "es", "xyz", ""):
+            assert normalize_term(code) not in _gar, (
+                f"Code '{code}' must not activate the Garífuna path"
+            )
+
+
+class TestLanguageCodeNormalizationWithLexicon:
+    """
+    DB-backed: each Garífuna target-language variant must activate the
+    lexicon-first path in get_response(). Tests 'water' (guaranteed lexicon
+    HIT, 0 s, no OpenAI call) so the pipeline returns immediately on the hit.
+    If normalization fails, is_garifuna_target=False → lexicon skipped → DECLINE
+    or unvalidated OpenAI output instead of 'Duna'.
+    Requires localhost:5432.
+    """
+
+    VARIANTS = ["gar", "garifuna", "Garifuna", "garífuna", "Garífuna"]
+
+    @pytest.fixture(autouse=True)
+    def _translater(self):
+        try:
+            from app.services.translater.translater import Translater
+            self.t = Translater()
+        except Exception as e:
+            pytest.skip(f"Translater unavailable: {e}")
+
+    @pytest.mark.parametrize("variant", VARIANTS)
+    def test_water_lexicon_hit_for_all_garifuna_variants(self, variant):
+        """'water' must return 'Duna' via the lexicon-first path for every variant.
+        A DECLINE or non-Duna result means normalize_term() failed to activate
+        is_garifuna_target=True and the lexicon path was skipped."""
+        result = self.t.get_response({
+            "text": "water",
+            "base_language": "English",
+            "target_language": variant,
+            "ui_language": "en",
+        })
+        assert (result.translation or "").strip() == "Duna", (
+            f"target_language='{variant}' must return 'Duna' via lexicon; "
+            f"got: {result.translation!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# E. Context-grounding regression tests (Task 2 fix)
+# ---------------------------------------------------------------------------
+
+class TestOutputGroundingCheck:
+    """
+    _output_grounded_in_context() must require at least one meaningful LLM
+    output token to appear in the retrieved RAG context. This guards against
+    the word-set check accepting a valid Garífuna word returned for the wrong
+    meaning when the RAG context is completely unrelated to the requested term.
+
+    Canonical case — smartphone → Mibi:
+      - 'mibi' is in the Garífuna word set (a real word, different meaning)
+      - RAG context for 'smartphone' is number exercises (no 'mibi')
+      - word-set check: PASS (mibi in set) ← insufficient alone
+      - grounding check: FAIL (mibi not in context) → DECLINE
+    End-to-end confirmation is in the Phase 4C benchmark (requires VPS + OpenAI key).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _translater(self):
+        try:
+            from app.services.translater.translater import Translater
+            self.t = Translater()
+        except Exception as e:
+            pytest.skip(f"Translater unavailable: {e}")
+
+    # Synthetic context approximating number-exercise pages returned for 'smartphone'
+    # (LIBRO GARIFUNA II, pp. 143-144): no 'mibi' present.
+    _NUMBER_EXERCISE_CTX = (
+        "Ejercicio # 1  720 730  aban isein urüwa buiti seingü "
+        "seingü-aban seingü-biama weyu müda fufun biama urüwa"
+    )
+
+    # Synthetic p.203 context from DICCIONARIO GARIFUNA.
+    _P203_CTX = (
+        "NUMERU LIDAN GARIFUNA aban isein urüwa buiti seingü "
+        "seingü-aban seingü-biama naguanu weyu müda fufun biama"
+    )
+
+    def test_mibi_not_grounded_in_number_exercise_context(self):
+        """'Mibi' is not in a typical number-exercise context → grounding fails.
+        This is the smartphone/Mibi failure case that motivates this check."""
+        assert not self.t._output_grounded_in_context("Mibi", self._NUMBER_EXERCISE_CTX)
+
+    def test_numeru_lidan_garifuna_grounded_in_p203_context(self):
+        """'NUMERU LIDAN GARIFUNA' must be grounded via 'numeru' or 'lidan' in p203."""
+        assert self.t._output_grounded_in_context("NUMERU LIDAN GARIFUNA", self._P203_CTX)
+
+    def test_aban_grounded_in_context_containing_aban(self):
+        """'Aban' (1 in Garífuna) must be grounded when context contains 'aban'."""
+        assert self.t._output_grounded_in_context("Aban", self._NUMBER_EXERCISE_CTX)
+
+    def test_empty_context_always_fails(self):
+        assert not self.t._output_grounded_in_context("Duna", "")
+        assert not self.t._output_grounded_in_context("NUMERU LIDAN GARIFUNA", "")
+
+    def test_empty_translation_fails(self):
+        assert not self.t._output_grounded_in_context("", self._P203_CTX)
+
+    def test_short_tokens_not_counted(self):
+        """Tokens of length ≤ 2 must not count as grounding evidence."""
+        ctx = "en la de el"  # all tokens len ≤ 2
+        assert not self.t._output_grounded_in_context("en la", ctx)
+
+    def test_skip_tokens_not_counted_as_grounding(self):
+        """'garifuna'/'garífuna' must not count as grounding evidence even if in context."""
+        ctx = "garifuna garífuna lidan"
+        assert not self.t._output_grounded_in_context("GARIFUNA", ctx)
+
+    def test_non_skip_token_in_context_grounds(self):
+        """'lidan' (not in skip tokens) in context is sufficient grounding evidence."""
+        ctx = "garifuna garífuna lidan"
+        assert self.t._output_grounded_in_context("NUMERU LIDAN GARIFUNA", ctx)
+
+    def test_one_token_in_context_is_sufficient(self):
+        """A single grounded token suffices — not all translation tokens need to match."""
+        ctx = "weyu agumuraha"  # contains 'weyu' and 'agumuraha'
+        assert self.t._output_grounded_in_context("Agumuraha Weyu", ctx)
+
+    def test_token_with_punctuation_stripped_before_check(self):
+        """Punctuation on tokens must be stripped before the context substring check."""
+        ctx = "duna lidan weyu"
+        assert self.t._output_grounded_in_context("Duna.", ctx)
+        assert self.t._output_grounded_in_context("(Duna)", ctx)
