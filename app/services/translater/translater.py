@@ -34,6 +34,15 @@ _RE_NUMBERS_INTENT = re.compile(
 # discriminate a Garífuna translation from a Spanish one.
 _SKIP_VALIDATION_TOKENS: frozenset = frozenset({"garifuna", "garífuna"})
 
+# Supported target languages. Any target_language that does not normalize to one
+# of these is rejected at the service boundary before any pipeline logic runs.
+# Keeps unsupported targets from reaching OpenAI and returning unchecked output.
+_SUPPORTED_LANGUAGE_TARGETS: frozenset = frozenset({
+    "gar", "garifuna",   # Garífuna — all case/accent variants normalize here
+    "en", "english",
+    "es", "spanish",
+})
+
 # Lexicon records whose garifuna column contains Spanish descriptions, alphabet
 # meta-commentary, or geographic text rather than Garífuna vocabulary.
 # Source: Phase 4C audit. These 23 records must not contribute tokens to the
@@ -195,26 +204,33 @@ class Translater:
     def _output_grounded_in_context(self, translation: str, context: str, query_text: str = "") -> bool:
         """Returns True when the retrieved context supports the LLM translation.
 
-        Condition 1 — input relevance (when query_text is given): at least one
-        normalized token from the input query must appear in the retrieved context.
-        This confirms the context is ABOUT the requested term. Example: for
-        'smartphone', 'smartphone' does not appear in the retrieved technology-
-        vocabulary or number-exercise chunks, so the context cannot support any
-        translation of 'smartphone' even if a valid Garífuna word (e.g. 'Mibi'
-        for landline telephone) happens to appear on the same page.
+        Condition 1 — input relevance (when query_text given, non-numbers queries):
+        language-name tokens ("garifuna", "garífuna") are excluded from the check
+        because they appear in ALL Garífuna-language contexts and cannot demonstrate
+        that the context is specifically about the requested concept. At least one
+        content token (non-language-name, non-short) must appear in context. If the
+        query contains NO content tokens (e.g. "garifuna" alone), condition 1 is
+        waived. Numbers queries are exempt entirely — page_search deterministically
+        retrieves p.203 for them, so condition 1 would yield false negatives.
 
         Condition 2 — output presence: at least one meaningful translation token
-        must appear in the context (original check)."""
+        must appear in the context."""
         if not context:
             return False
         ctx_lower = context.lower()
         if query_text:
-            for tok in query_text.split():
-                q = normalize_term(tok)
-                if len(q) > 2 and q in ctx_lower:
-                    break
-            else:
-                return False  # no query token found in context → context is irrelevant
+            # Numbers queries retrieve p.203 deterministically via page_search;
+            # "numbers" does not appear in that page's text so condition 1 would
+            # always fail for them. Skip condition 1 for numbers queries only.
+            if not _RE_NUMBERS_INTENT.search(query_text):
+                content_tokens = [
+                    normalize_term(tok)
+                    for tok in query_text.split()
+                    if len(normalize_term(tok)) > 2
+                    and normalize_term(tok) not in _SKIP_VALIDATION_TOKENS
+                ]
+                if content_tokens and not any(qt in ctx_lower for qt in content_tokens):
+                    return False  # context is not about the requested concept
         for token in (translation or "").split():
             w = token.strip(".,;:!?-()").lower()
             if len(w) > 2 and w not in _SKIP_VALIDATION_TOKENS and w in ctx_lower:
@@ -256,6 +272,12 @@ Provide only the translated output in {target_language}."""
             target_language = translation_info["target_language"]
             ui_lang = (translation_info.get("ui_language") or "en").strip().lower()
             decline_msg = _DECLINE_RESPONSE.get(ui_lang, _DECLINE_RESPONSE["en"])
+
+            # Fail-closed: reject unsupported target languages before any pipeline
+            # logic runs. Prevents unknown targets from reaching OpenAI and returning
+            # unchecked output with no Garífuna-specific validation applied.
+            if normalize_term(target_language) not in _SUPPORTED_LANGUAGE_TARGETS:
+                return llm_response(translation=decline_msg)
 
             _gar = frozenset({"garifuna", "gar"})
             is_garifuna_target = normalize_term(target_language) in _gar

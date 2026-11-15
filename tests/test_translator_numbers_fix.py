@@ -798,8 +798,9 @@ class TestOutputGroundingCheck:
         assert not self.t._output_grounded_in_context("Mibi", tech_vocab_ctx, "smartphone")
 
     def test_garifuna_query_token_grounds_numbers_translation(self):
-        """'garifuna' in query 'numbers in garifuna language' also appears in p203 context
-        → condition 1 passes via 'garifuna'; condition 2 passes via 'numeru'."""
+        """'numbers in garifuna language' triggers the numbers-query exemption → condition 1
+        is waived entirely (page_search is deterministic for numbers); condition 2 passes
+        via 'numeru' present in p203 context."""
         assert self.t._output_grounded_in_context(
             "NUMERU LIDAN GARIFUNA", self._P203_CTX, "numbers in garifuna language"
         )
@@ -821,3 +822,186 @@ class TestOutputGroundingCheck:
         ctx = "mibi lidan aban weyu"
         # No query_text → condition 1 skipped → condition 2: 'mibi' in ctx → True
         assert self.t._output_grounded_in_context("Mibi", ctx)
+
+    # --- Adversarial grounding tests (Check 2 fixes) ---
+
+    def test_language_name_query_token_cannot_ground_translation(self):
+        """'garifuna' in query must NOT trivially satisfy condition 1 for non-numbers
+        queries. It appears in ALL Garífuna-language contexts, so it cannot demonstrate
+        that the retrieved context is specifically about the query concept.
+        Adversarial case: 'smartphone in Garifuna' — 'garifuna' is in context, 'Mibi'
+        is in context, but neither proves the context is about smartphones."""
+        ctx = "garifuna aban isein urüwa Mibi lidan weyu"
+        # 'garifuna' excluded from condition 1 → 'smartphone' not in ctx → False
+        assert not self.t._output_grounded_in_context("Mibi", ctx, "smartphone in Garifuna")
+
+    def test_numbers_query_waives_condition1_allows_translation(self):
+        """Numbers queries skip condition 1 — 'numbers' does not appear in p.203 text
+        (Garífuna-only page) but p.203 is retrieved deterministically via page_search.
+        Condition 2 still applies: translation token must appear in context."""
+        ctx = "NUMERU LIDAN GARIFUNA aban isein urüwa weyu"
+        # 'numbers' NOT in ctx — but numbers intent waives condition 1
+        assert self.t._output_grounded_in_context("NUMERU LIDAN GARIFUNA", ctx, "NUMBERS IN GARIFUNA")
+
+    def test_query_all_stop_tokens_waives_condition1(self):
+        """A query with no content tokens (all language-name or short) waives
+        condition 1 — there is no concept term to verify against. Condition 2 applies."""
+        ctx = "mibi lidan aban weyu"
+        # 'garífuna' is the only token (len > 2), it's a stop token → no content tokens
+        # → condition 1 waived → condition 2: 'mibi' in ctx → True
+        assert self.t._output_grounded_in_context("Mibi", ctx, "garífuna")
+
+
+# ---------------------------------------------------------------------------
+# F. Supported-language allowlist tests (Check 1 fixes)
+# ---------------------------------------------------------------------------
+
+class TestSupportedLanguageTargets:
+    """
+    Pure-logic: _SUPPORTED_LANGUAGE_TARGETS must contain exactly the supported
+    target codes and nothing else. Any target_language that normalizes outside
+    this set must not be supported.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _load(self):
+        from app.services.translater.translater import _SUPPORTED_LANGUAGE_TARGETS
+        from app.services.lexicon.lexicon import normalize_term
+        self.supported = _SUPPORTED_LANGUAGE_TARGETS
+        self.normalize = normalize_term
+
+    def test_all_garifuna_variants_normalize_to_supported(self):
+        """All five Garífuna code variants must normalize to a supported code."""
+        for v in ("gar", "garifuna", "Garifuna", "garífuna", "Garífuna"):
+            assert self.normalize(v) in self.supported, (
+                f"'{v}' must normalize to a supported code"
+            )
+
+    def test_english_variants_normalize_to_supported(self):
+        for v in ("en", "english", "English", "ENGLISH"):
+            assert self.normalize(v) in self.supported, (
+                f"'{v}' must normalize to a supported code"
+            )
+
+    def test_spanish_variants_normalize_to_supported(self):
+        for v in ("es", "spanish", "Spanish", "SPANISH"):
+            assert self.normalize(v) in self.supported, (
+                f"'{v}' must normalize to a supported code"
+            )
+
+    def test_unsupported_codes_not_in_set(self):
+        """Unsupported language codes must not be in the allowed set."""
+        for code in ("Klingon", "French", "mandarin", "xyz", "123", ""):
+            assert self.normalize(code) not in self.supported, (
+                f"'{code}' must not be a supported target"
+            )
+
+    def test_set_is_frozenset(self):
+        from app.services.translater.translater import _SUPPORTED_LANGUAGE_TARGETS as slt
+        assert isinstance(slt, frozenset)
+
+    def test_set_contains_exactly_six_codes(self):
+        """Must contain exactly 6 entries: gar, garifuna, en, english, es, spanish."""
+        assert len(self.supported) == 6, (
+            f"Expected 6 supported codes, got {sorted(self.supported)}"
+        )
+
+
+class TestFailClosedLanguageTargets:
+    """
+    get_response() must return the decline message for any target_language that
+    normalizes outside _SUPPORTED_LANGUAGE_TARGETS — before lexicon lookup, RAG,
+    or OpenAI. This ensures unsupported targets never receive unchecked output.
+    'water' is used as input because it is a guaranteed lexicon hit for Garífuna
+    targets; a decline for Garífuna labels would indicate a normalization bug,
+    not allowlist behavior.
+    Requires localhost:5432 (Translater initialization).
+    """
+
+    DECLINE_FRAG = "not available for this term"
+
+    @pytest.fixture(autouse=True)
+    def _translater(self):
+        try:
+            from app.services.translater.translater import Translater
+            self.t = Translater()
+        except Exception as e:
+            pytest.skip(f"Translater unavailable: {e}")
+
+    def _is_decline(self, translation: str) -> bool:
+        return self.DECLINE_FRAG in (translation or "").lower()
+
+    @pytest.mark.parametrize("bad_tgt", ["Klingon", "French", "xyz", "mandarin", "123"])
+    def test_unsupported_target_returns_decline(self, bad_tgt):
+        """Unsupported target_language must return the localized decline — not raw
+        OpenAI output. The check fires before the lexicon path so 'water' cannot
+        return 'Duna' for an unsupported target."""
+        result = self.t.get_response({
+            "text": "water",
+            "base_language": "English",
+            "target_language": bad_tgt,
+            "ui_language": "en",
+        })
+        tl = (result.translation or "").strip()
+        assert self._is_decline(tl), (
+            f"target_language='{bad_tgt}' must return decline; got: {tl!r}"
+        )
+
+    def test_empty_target_returns_decline(self):
+        """Empty string target_language must decline."""
+        result = self.t.get_response({
+            "text": "water",
+            "base_language": "English",
+            "target_language": "",
+            "ui_language": "en",
+        })
+        assert self._is_decline((result.translation or "").strip())
+
+    def test_unsupported_target_returns_spanish_decline_for_es_ui(self):
+        """When ui_language='es', unsupported target must return the Spanish-language
+        decline message."""
+        result = self.t.get_response({
+            "text": "water",
+            "base_language": "English",
+            "target_language": "Klingon",
+            "ui_language": "es",
+        })
+        tl = (result.translation or "").strip()
+        assert "traducción garífuna verificada" in tl.lower(), (
+            f"Expected Spanish decline; got: {tl!r}"
+        )
+
+    def test_supported_garifuna_accented_still_works(self):
+        """'Garífuna' (accented, supported) must still return 'Duna' — confirming
+        the allowlist does not block valid Garífuna label variants."""
+        result = self.t.get_response({
+            "text": "water",
+            "base_language": "English",
+            "target_language": "Garífuna",
+            "ui_language": "en",
+        })
+        tl = (result.translation or "").strip()
+        assert tl == "Duna", f"'Garífuna' target must return 'Duna'; got: {tl!r}"
+
+    def test_supported_target_gar_still_works(self):
+        """Production code 'gar' must remain supported after the allowlist addition."""
+        result = self.t.get_response({
+            "text": "water",
+            "base_language": "English",
+            "target_language": "gar",
+            "ui_language": "en",
+        })
+        assert (result.translation or "").strip() == "Duna"
+
+    def test_supported_english_target_not_blocked(self):
+        """'English' (supported) must not be blocked by the allowlist."""
+        result = self.t.get_response({
+            "text": "agua",
+            "base_language": "Spanish",
+            "target_language": "English",
+            "ui_language": "en",
+        })
+        tl = (result.translation or "").strip()
+        assert tl and not self._is_decline(tl), (
+            f"'English' target must not be blocked; got: {tl!r}"
+        )
