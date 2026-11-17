@@ -135,35 +135,68 @@ _KNOWN_RESTRICTED_SOURCES: frozenset = frozenset({
                         # publication_allowed: false, review_state: pending_cultural_review
 })
 
+# Source-path substrings for content with documented, verified publication permission.
+#
+# CURRENTLY EMPTY — no source has cleared the approval bar, and no policy is
+# defined for how an allowlist entry would interact with the two required
+# approval signals (publication_allowed=True AND review_state='approved').
+#
+# This constant is not consulted in _is_publication_restricted() until a policy
+# is defined. Any source that needs to be served must have both DB metadata
+# fields set explicitly by an owner approval action.
+#
+# Before any source can be added:
+#   1. Written or documented approval (email, letter, or signed agreement)
+#      from the copyright holder explicitly authorizing public chatbot delivery.
+#   2. A defined policy for how allowlist membership interacts with the
+#      publication_allowed / review_state AND requirement.
+#   3. Scope: commercial vs. educational vs. public use.
+#   4. Attribution requirements, if any.
+_APPROVED_SOURCE_PATTERNS: frozenset = frozenset()
+
 
 def _is_publication_restricted(meta: dict) -> bool:
     """
     Return True when a chunk must not appear in public LLM context.
 
-    Three independent conditions; any one is sufficient:
-      1. publication_allowed is explicitly false (bool or string).
-      2. review_state is "pending_cultural_review" (staging draft).
-      3. Source path matches _KNOWN_RESTRICTED_SOURCES.
-         Condition 3 is the fail-closed guard: it fires even when metadata
-         fields are absent or null, so an indexing gap cannot inadvertently
-         expose a staged document.
+    Fail-closed: a chunk may only be served when BOTH approval signals are
+    explicitly present. Neither publication_allowed=True alone nor
+    review_state='approved' alone is sufficient.
+
+    Decision order:
+      1. publication_allowed explicitly False  → deny (always)
+      2. review_state is pending_cultural_review → deny (always)
+      3. Source matches _KNOWN_RESTRICTED_SOURCES → deny (always, overrides metadata)
+      4. publication_allowed is True AND review_state is 'approved' → allow
+      5. Otherwise                             → deny (fail-closed)
+
+    Rule 3 fires even when both explicit approvals are set, so a restricted
+    source cannot be unblocked by metadata alone.
     """
-    # 1. Explicit publication_allowed=false
+    source = (meta.get("source") or meta.get("filename") or "").upper()
+
+    # 1. Explicit deny
     pa = meta.get("publication_allowed")
     if pa is False or (isinstance(pa, str) and pa.lower() == "false"):
         return True
 
-    # 2. Pending cultural review
+    # 2. Staging draft
     rs = meta.get("review_state")
     if isinstance(rs, str) and rs.lower() == "pending_cultural_review":
         return True
 
-    # 3. Known restricted source (fail-closed guard)
-    source = (meta.get("source") or meta.get("filename") or "").upper()
+    # 3. Known restricted source — unconditional, overrides any metadata value
     if any(pattern in source for pattern in _KNOWN_RESTRICTED_SOURCES):
         return True
 
-    return False
+    # 4. Both approval signals required; neither is sufficient alone
+    pa_ok = pa is True or (isinstance(pa, str) and pa.lower() == "true")
+    rs_ok = isinstance(rs, str) and rs.lower() == "approved"
+    if pa_ok and rs_ok:
+        return False
+
+    # 5. Fail-closed: missing, partial, or unknown approval state → deny
+    return True
 
 
 class Nodes:
@@ -429,10 +462,10 @@ class Nodes:
     def _filter_restricted_docs(self, docs: list[dict]) -> list[dict]:
         """Remove chunks that must not appear in public LLM context.
 
-        Three conditions apply: explicit publication_allowed=false, pending
-        cultural review state, and source-path match against
-        _KNOWN_RESTRICTED_SOURCES.  The source-path guard is fail-closed:
-        it fires even when metadata fields are absent or null.
+        A chunk is served only when publication_allowed=True AND review_state='approved'
+        are both explicitly set. Explicit denial, pending cultural review, or the
+        Historia source-path guard each block independently regardless of the other
+        metadata field's value.
         """
         return [d for d in docs if not _is_publication_restricted(d.get("metadata") or {})]
 

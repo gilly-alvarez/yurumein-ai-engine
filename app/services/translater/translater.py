@@ -277,15 +277,18 @@ Provide only the translated output in {target_language}."""
             # logic runs. Prevents unknown targets from reaching OpenAI and returning
             # unchecked output with no Garífuna-specific validation applied.
             if normalize_term(target_language) not in _SUPPORTED_LANGUAGE_TARGETS:
-                return llm_response(translation=decline_msg)
+                return llm_response(translation=decline_msg, match_type="none")
 
             _gar = frozenset({"garifuna", "gar"})
             is_garifuna_target = normalize_term(target_language) in _gar
             is_garifuna_source = normalize_term(base_language) in _gar
 
-            # Lexicon-first exact lookup for Garífuna targets (EN/ES → Garífuna).
+            # Lexicon-first lookup for Garífuna targets (EN/ES → Garífuna).
+            # match_type reflects whether the user's input required diacritic stripping:
+            #   'exact'  — nfc_normalize_term(input) == normalize_term(input) (no stripping)
+            #   'folded' — diacritics were stripped to match, or LIKE annotation fallback fired
             if is_garifuna_target:
-                r = self.lexicon.lookup(text, base_language)
+                r, fwd_match_type = self.lexicon.lookup_with_type(text, base_language)
                 if r:
                     distinct_forms = []
                     for row in r:
@@ -293,11 +296,14 @@ Provide only the translated output in {target_language}."""
                         if form and form not in distinct_forms:
                             distinct_forms.append(form)
                     if distinct_forms:
-                        return llm_response(translation="; ".join(distinct_forms))
+                        return llm_response(
+                            translation="; ".join(distinct_forms),
+                            match_type=fwd_match_type,
+                        )
 
             # Lexicon-first reverse lookup for Garífuna source (Garífuna → EN/ES).
             if is_garifuna_source and not is_garifuna_target:
-                r = self.lexicon.reverse_lookup(text)
+                r, rev_match_type = self.lexicon.reverse_lookup_with_type(text)
                 if r:
                     col = "english" if target_language.lower() in {"en", "english"} else "spanish"
                     forms = []
@@ -306,19 +312,22 @@ Provide only the translated output in {target_language}."""
                         if val and val not in forms:
                             forms.append(val)
                     if forms:
-                        return llm_response(translation="; ".join(forms))
+                        return llm_response(
+                            translation="; ".join(forms),
+                            match_type=rev_match_type,
+                        )
 
             # Hybrid retrieval from the curated vector store.
             context = self._retrieve_context(text)
 
             # No context → verified database gap.
             if not context:
-                return llm_response(translation=decline_msg)
+                return llm_response(translation=decline_msg, match_type="none")
 
             # For Garífuna target: context must contain at least one verified Garífuna word.
             # Spanish-only context cannot support a Garífuna translation.
             if is_garifuna_target and not self._context_has_garifuna_evidence(context):
-                return llm_response(translation=decline_msg)
+                return llm_response(translation=decline_msg, match_type="none")
 
             messages = [
                 {"role": "system", "content": self.get_system_prompt(context)},
@@ -343,21 +352,24 @@ Provide only the translated output in {target_language}."""
             # (following the system prompt instruction). Show the localized decline message —
             # not a 503 toast, which would imply the service is down.
             if not translation_text:
-                return llm_response(translation=decline_msg)
+                return llm_response(translation=decline_msg, match_type="none")
 
             # For Garífuna target: validate that the output contains at least one word-form
             # found in the lexicon's garifuna column. A Spanish word appearing as a gloss
             # in the retrieved bilingual context cannot pass this check.
             if is_garifuna_target and not self._output_contains_garifuna_forms(translation_text):
-                return llm_response(translation=decline_msg)
+                return llm_response(translation=decline_msg, match_type="none")
 
             # Grounding check: translation must be derivable from context that is
             # actually about the requested term. query_text (the input) is passed so
             # condition 1 can verify the context is relevant to the query.
             if is_garifuna_target and not self._output_grounded_in_context(translation_text, context, text):
-                return llm_response(translation=decline_msg)
+                return llm_response(translation=decline_msg, match_type="none")
 
-            return validated
+            return llm_response(
+                translation=translation_text,
+                match_type="llm",
+            )
 
         except TranslationServiceUnavailableError:
             raise

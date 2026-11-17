@@ -7,15 +7,17 @@ Covers:
      - Simulated PyPDFLoader shape (source + page fields)
      - Simulated UnstructuredWordDocumentLoader shape (source only)
   2. page_number correctly derived from loader page field after merge fix
-  3. upload_docs_pipeline — approved upload stamps publication_allowed=True / approved
+  3. upload_docs_pipeline — confirmed upload stamps publication_allowed=False /
+     pending_cultural_review (fail-closed: not publicly retrievable until approved)
   4. upload_docs_pipeline — confirmed=False raises ValueError immediately
   5. upload_docs_pipeline — confirmed required (no default); TypeError if omitted
-  6. Restriction filter: existing pending/restricted docs remain blocked
+  6. Restriction filter: fail-closed gate; legacy allowlist; approved docs pass
   7. Historia name preserved through merge keeps source-path guard active
   8. Route level: Historia upload rejected before pipeline; zero chunks → 400
   9. Route level: authorized upload passes confirmed=True; original filename preserved
 
-Policy: review before upload; upload == approved for publication.
+Policy: review before upload; upload == pending_cultural_review (not yet public).
+An explicit owner approval step is required to set publication_allowed=True.
 Existing DB documents are not touched by these tests (all storage is mocked).
 
 Run from repo root:
@@ -207,9 +209,11 @@ class TestHistoriaFilenamePreservedThroughMerge:
 
 class TestPipelineApprovalStamping:
     """
-    Policy: upload == approved for publication.
-    Every chunk from a confirmed upload must be stamped publication_allowed=True
-    and review_state="approved", unconditionally.
+    Policy: upload == pending_cultural_review (fail-closed).
+    Every chunk from a confirmed upload must be stamped publication_allowed=False
+    and review_state="pending_cultural_review", unconditionally.
+    Content is indexed but NOT publicly retrievable until a separate owner
+    approval step sets publication_allowed=True / review_state="approved".
     """
 
     def _run_pipeline(self, chunks=None, original_filename=None, confirmed=True):
@@ -236,41 +240,41 @@ class TestPipelineApprovalStamping:
 
         return added_docs
 
-    def test_approved_upload_publication_allowed_true(self):
+    def test_upload_stamps_publication_allowed_false(self):
         docs = self._run_pipeline()
-        assert docs[0].metadata["publication_allowed"] is True
+        assert docs[0].metadata["publication_allowed"] is False
 
-    def test_approved_upload_review_state_approved(self):
+    def test_upload_stamps_review_state_pending(self):
         docs = self._run_pipeline()
-        assert docs[0].metadata["review_state"] == "approved"
+        assert docs[0].metadata["review_state"] == "pending_cultural_review"
 
-    def test_all_chunks_stamped_approved(self):
+    def test_all_chunks_stamped_pending(self):
         chunks = [
             Document(page_content="chunk 1", metadata={"source": "doc.txt"}),
             Document(page_content="chunk 2", metadata={"source": "doc.txt"}),
             Document(page_content="chunk 3", metadata={"source": "doc.txt"}),
         ]
         docs = self._run_pipeline(chunks=chunks)
-        assert all(d.metadata["publication_allowed"] is True for d in docs)
-        assert all(d.metadata["review_state"] == "approved" for d in docs)
+        assert all(d.metadata["publication_allowed"] is False for d in docs)
+        assert all(d.metadata["review_state"] == "pending_cultural_review" for d in docs)
 
-    def test_loader_cannot_override_publication_allowed(self):
-        """Even if a loader injects publication_allowed=False, approved upload wins."""
+    def test_pipeline_overrides_loader_publication_allowed(self):
+        """Pipeline always stamps False; loader-injected True is overridden."""
         chunk = Document(
             page_content="content",
-            metadata={"source": "doc.txt", "publication_allowed": False},
+            metadata={"source": "doc.txt", "publication_allowed": True},
         )
         docs = self._run_pipeline(chunks=[chunk])
-        assert docs[0].metadata["publication_allowed"] is True
+        assert docs[0].metadata["publication_allowed"] is False
 
-    def test_loader_cannot_override_review_state(self):
-        """Loader-injected review_state is replaced by 'approved'."""
+    def test_pipeline_overrides_loader_review_state(self):
+        """Pipeline always stamps pending_cultural_review; loader-injected 'approved' is overridden."""
         chunk = Document(
             page_content="content",
-            metadata={"source": "doc.txt", "review_state": "pending_cultural_review"},
+            metadata={"source": "doc.txt", "review_state": "approved"},
         )
         docs = self._run_pipeline(chunks=[chunk])
-        assert docs[0].metadata["review_state"] == "approved"
+        assert docs[0].metadata["review_state"] == "pending_cultural_review"
 
     def test_original_filename_passed_to_processor(self):
         with (
@@ -333,11 +337,22 @@ class TestPipelineConfirmationRequired:
 # 5. Restriction filter — existing pending/restricted docs remain blocked
 # ===========================================================================
 
-class TestExistingRestrictionFilterUnchanged:
+class TestRestrictionFilter:
     """
-    _is_publication_restricted is unchanged.  Existing DB chunks with
-    publication_allowed=False, pending_cultural_review state, or a Historia
-    source path are still blocked from public context.
+    _is_publication_restricted — fail-closed gate requiring BOTH approval signals.
+
+    Deny rules (always fire, evaluated first):
+      - publication_allowed=False
+      - review_state="pending_cultural_review"
+      - Source matches _KNOWN_RESTRICTED_SOURCES (e.g. HISTORIA_ES_EN)
+        — fires unconditionally, even when both approval signals are set
+
+    Allow rule (checked after all deny rules):
+      - publication_allowed=True AND review_state='approved' (both required)
+
+    Fail-closed: any chunk that does not satisfy the allow rule is DENIED.
+    Neither signal alone grants access. Missing, partial, or unknown
+    approval state defaults to deny.
     """
 
     def test_publication_allowed_false_still_blocked(self):
@@ -392,6 +407,103 @@ class TestExistingRestrictionFilterUnchanged:
             "review_state": "pending_cultural_review",
         }
         assert _is_publication_restricted(meta) is True
+
+    # --- New tests for fail-closed and allowlist behavior ---
+
+    def test_missing_metadata_unknown_source_blocked(self):
+        """Fail-closed rule 7: absent metadata + unknown source → deny."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {"source": "MUSICAL_INSTRUMENTS_DATASET.txt"}
+        ) is True
+
+    def test_no_metadata_at_all_blocked(self):
+        """Fail-closed rule 7: completely empty metadata → deny."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted({}) is True
+
+    def test_aburuháti_diccionario_no_metadata_blocked(self):
+        """ABÜRÜHATI books are NOT on the allowlist until written permission is documented.
+        'author_permission_reported' (verbal) ≠ authorization for public excerpt delivery.
+        A DICCIONARIO GARIFUNA chunk without explicit publication_allowed=True must be blocked.
+        """
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {"source": "DICCIONARIO GARIFUNA.pdf"}
+        ) is True
+
+    def test_aburuháti_libro_serie_i_no_metadata_blocked(self):
+        """LIBRO SERIE I chunk without explicit metadata is blocked (no written permission)."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {"source": "data/LIBRO SERIE I Garifuna.pdf"}
+        ) is True
+
+    def test_aburuháti_libro_garifuna_ii_no_metadata_blocked(self):
+        """LIBRO GARIFUNA II chunk without explicit metadata is blocked (no written permission)."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {"source": "LIBRO GARIFUNA II FORMATO DIGITAL.pdf"}
+        ) is True
+
+    def test_true_without_review_state_denied(self):
+        """Both signals required: publication_allowed=True alone does not grant access."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {"source": "HIMNO_NACIONAL_GUATEMALA_GARIFUNA.docx", "publication_allowed": True}
+        ) is True
+
+    def test_pending_state_blocks_regardless_of_source(self):
+        """Deny rules fire before allow rules: pending_cultural_review blocks unconditionally."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {
+                "source": "DICCIONARIO GARIFUNA.pdf",
+                "review_state": "pending_cultural_review",
+            }
+        ) is True
+
+    # --- Truth table: AND requirement for both approval signals ---
+
+    def test_null_publication_allowed_approved_review_state_denied(self):
+        """Both signals required: review_state='approved' alone does not grant access."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {"source": "GARIFUNA_IDENTITY_EN_ES.txt", "review_state": "approved"}
+        ) is True
+
+    def test_false_publication_allowed_approved_review_state_denied(self):
+        """Rule 1 fires before rule 4: publication_allowed=False blocks even with review_state='approved'."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {
+                "source": "GARIFUNA_IDENTITY_EN_ES.txt",
+                "publication_allowed": False,
+                "review_state": "approved",
+            }
+        ) is True
+
+    def test_true_with_pending_review_state_denied(self):
+        """Rule 2 fires before rule 4: pending_cultural_review blocks even with publication_allowed=True."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {
+                "source": "GARIFUNA_IDENTITY_EN_ES.txt",
+                "publication_allowed": True,
+                "review_state": "pending_cultural_review",
+            }
+        ) is True
+
+    def test_historia_with_both_approvals_denied(self):
+        """Rule 3 fires unconditionally: Historia is blocked even when both approval signals are set."""
+        from app.services.utils.RAG_pipeline.workflow.nodes import _is_publication_restricted
+        assert _is_publication_restricted(
+            {
+                "source": "Yurumein_AI_Historia_ES_EN_v1.2_Auditada_PARA_SUBIR.txt",
+                "publication_allowed": True,
+                "review_state": "approved",
+            }
+        ) is True
 
 
 # ===========================================================================

@@ -305,16 +305,30 @@ def upload_docs_pipeline(
     *,
     confirmed: bool,
 ) -> List[str]:
-    """Process and index pre-approved documents.
+    """Index a document into the RAG store with a pending-review publication state.
 
     confirmed must be True — the caller (route handler) is asserting that an
-    authenticated administrator has explicitly confirmed the document was
-    reviewed and approved before upload.  Passing confirmed=False raises
-    immediately so accidental or programmatic bypasses are caught at the
-    boundary closest to indexing.
+    authenticated administrator has explicitly triggered the upload.  Passing
+    confirmed=False raises immediately so accidental or programmatic bypasses
+    are caught at the boundary closest to indexing.
 
-    Every chunk is stamped publication_allowed=True / review_state="approved"
-    unconditionally; loader metadata cannot override these values.
+    Every uploaded chunk is stamped:
+        publication_allowed = False
+        review_state        = "pending_cultural_review"
+
+    This is fail-closed: new content is NOT publicly retrievable until a
+    separate approval step explicitly sets publication_allowed=True and
+    review_state="approved" on the indexed chunks.
+
+    The _is_publication_restricted() guard in nodes.py enforces this at
+    retrieval time — chunks with pending_cultural_review state are always
+    filtered from the LLM context regardless of other metadata.
+
+    OWNER ACTION REQUIRED: There is currently no approval API. Uploaded
+    documents will not appear in public RAG responses until the production
+    database rows are manually updated by an owner-approved workflow.
+    A future /approve_docs endpoint should update these fields after editorial
+    review. Do not add that endpoint without explicit owner authorization.
     """
     if not confirmed:
         raise ValueError(
@@ -332,11 +346,11 @@ def upload_docs_pipeline(
         if not chunks:
             return []
 
-        # Hard-assign approval status on every chunk so loader metadata
-        # can never override the administrator's explicit confirmation.
+        # Stamp every chunk as pending — loader metadata cannot override this.
+        # Content is indexed but NOT publicly retrievable until explicitly approved.
         for chunk in chunks:
-            chunk.metadata["publication_allowed"] = True
-            chunk.metadata["review_state"] = "approved"
+            chunk.metadata["publication_allowed"] = False
+            chunk.metadata["review_state"] = "pending_cultural_review"
 
         v_store = VectorStoreManager()
         ids = v_store.add_documents(chunks)
