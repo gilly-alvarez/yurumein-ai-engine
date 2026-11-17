@@ -70,10 +70,10 @@ class YurumeinLexicon:
         norm = normalize_term(term)
         column = "spanish_norm" if lang in {"spanish", "es"} else "english_norm"
 
-        # quality_flag filter: 'bad' rows are always excluded.
-        # quality_flag column may not yet exist (pre-migration): use IS NULL OR != 'bad'
-        # so the query degrades gracefully on an un-migrated schema.
-        _quality_guard = "(quality_flag IS NULL OR quality_flag != 'bad')"
+        # quality_flag filter: only 'ok' rows are served; 'bad' and 'review' are excluded.
+        # quality_flag column may not yet exist (pre-migration): IS NULL keeps those rows
+        # accessible so the query degrades gracefully on an un-migrated schema.
+        _quality_guard = "(quality_flag IS NULL OR quality_flag = 'ok')"
 
         sql_exact = text(
             f"SELECT * FROM yurumein_lexicon "
@@ -115,7 +115,7 @@ class YurumeinLexicon:
         lang = language.lower()
         norm = normalize_term(term)
         column = "spanish_norm" if lang in {"spanish", "es"} else "english_norm"
-        _quality_guard = "(quality_flag IS NULL OR quality_flag != 'bad')"
+        _quality_guard = "(quality_flag IS NULL OR quality_flag = 'ok')"
 
         sql_exact = text(
             f"SELECT * FROM yurumein_lexicon "
@@ -166,7 +166,8 @@ class YurumeinLexicon:
              Only reached when the exact tier returns 0 results.
              Returns match_type='folded' so callers can distinguish it.
 
-        Rows with quality_flag='bad' are excluded from both tiers.
+        Rows with quality_flag='bad' or 'review' are excluded from both tiers.
+        Only 'ok' rows (and pre-migration NULL rows) are served.
 
         Pre-migration graceful degradation:
           If garifuna_norm column does not exist (migration 003 not yet applied),
@@ -182,7 +183,7 @@ class YurumeinLexicon:
         if not exact_norm:
             return [], "none"
 
-        _quality_guard = "(quality_flag IS NULL OR quality_flag != 'bad')"
+        _quality_guard = "(quality_flag IS NULL OR quality_flag = 'ok')"
 
         # Tier 1: exact NFC SQL lookup on indexed garifuna_norm.
         try:
